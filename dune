@@ -1,2 +1,3 @@
 (executable
- (name celeste_ocaml))
+ (name celeste_ocaml)
+ (libraries bigarray gmp apron apron.octD))
