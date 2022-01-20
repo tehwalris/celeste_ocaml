@@ -1,3 +1,4 @@
+open Lua_parser.Ast
 module StringMap = Map.Make (String)
 module StringSet = Set.Make (String)
 
@@ -62,7 +63,7 @@ type heap_value =
   | ArrayTable of array_table
   | ObjectTable of object_table
   | UnknownTable
-  | Function of statement list * scope list
+  | Function of ast list * scope list
   | Builtin of (state -> any_value list -> state)
 [@@deriving show]
 
@@ -114,13 +115,25 @@ let add_local (name : string) ((ref, names) : scope) : scope =
 
 let is_in_call (state : state) : bool = List.length state.scopes != 0
 
-let rec interpret_expression (state : state) (expr : expression) :
-    state * any_value =
+let rec interpret_expression (state : state) (expr : ast) : state * any_value =
   match expr with
-  | ExpressionNumber n -> (state, Concrete (ConcreteNumber n))
-  | ExpressionBoolean b -> (state, Concrete (ConcreteBoolean b))
-  | ExpressionTable [] -> allocate UnknownTable state
-  | ExpressionTable initializers ->
+  | Number n ->
+      ( state,
+        Concrete (ConcreteNumber (n |> int_of_string |> pico_number_of_int)) )
+  | Bool "true" -> (state, Concrete (ConcreteBoolean true))
+  | Bool "false" -> (state, Concrete (ConcreteBoolean false))
+  | Ident name -> (state, get_by_scope name state)
+  | Table (Elist []) -> allocate UnknownTable state
+  | Table (Elist initializer_asts) ->
+      let initializers =
+        List.map
+          (function
+            | Assign (Ident name, expr) -> (name, expr)
+            | _ ->
+                Lua_parser.Pp_ast.pp_ast_show expr;
+                failwith "unsupported table initializer")
+          initializer_asts
+      in
       let state, initializer_values =
         List.fold_left_map
           (fun state (_, expr) -> interpret_expression state expr)
@@ -128,53 +141,61 @@ let rec interpret_expression (state : state) (expr : expression) :
       in
       let value_map =
         List.map2
-          (fun (Identifier k, _) v -> (k, v))
+          (fun (name, _) value -> (name, value))
           initializers initializer_values
         |> List.to_seq |> StringMap.of_seq
       in
       allocate (ObjectTable value_map) state
-  | ExpressionFunction body -> allocate (Function (body, state.scopes)) state
-  | ExpressionIdentifier (Identifier name) -> (state, get_by_scope name state)
-  | ExpressionCall (callee_expr, arg_exprs) ->
+  | FunctionE (Fbody (Elist [], Slist body)) ->
+      allocate (Function (body, state.scopes)) state
+  | Clist [ callee_expr; Args (Elist arg_exprs) ] ->
       let state, callee_value = interpret_expression state callee_expr in
       let state, arg_values =
         List.fold_left_map interpret_expression state arg_exprs
       in
       let state, return_value = interpret_call state callee_value arg_values in
       (state, Option.get return_value)
+  | _ ->
+      Lua_parser.Pp_ast.pp_ast_show expr;
+      failwith "unsupported expression"
 
-and interpret_statement (state : state) (stmt : statement) : state =
+and interpret_statement (state : state) (stmt : ast) : state =
   assert (state.return == None);
   match stmt with
-  | StatmentAssignment (Identifier name, expr) ->
+  | Assign (Elist [ Ident name ], Elist [ expr ]) ->
       let state, value = interpret_expression state expr in
       set_by_scope name value state
-  | StatementLocal (name, Some expr) ->
-      let state = interpret_statement state (StatementLocal (name, None)) in
-      let state = interpret_statement state (StatmentAssignment (name, expr)) in
+  | Lassign (Elist [ Ident name ], expr) ->
+      let state = interpret_statement state (Lnames (Elist [ Ident name ])) in
+      let state =
+        interpret_statement state (Assign (Elist [ Ident name ], expr))
+      in
       state
-  | StatementLocal (Identifier name, None) ->
+  | Lnames (Elist [ Ident name ]) ->
       {
         state with
         scopes = add_local name (List.hd state.scopes) :: List.tl state.scopes;
       }
-  | StatementFunction (name, body) ->
+  | Function (FNlist [ Ident name ], f) ->
       interpret_statement state
-        (StatmentAssignment (name, ExpressionFunction body))
-  | StatementCall (callee_expr, arg_exprs) ->
+        (Assign (Elist [ Ident name ], Elist [ FunctionE f ]))
+  | Clist [ callee_expr; Args (Elist arg_exprs) ] ->
       let state, callee_value = interpret_expression state callee_expr in
       let state, arg_values =
         List.fold_left_map interpret_expression state arg_exprs
       in
       let state, _ = interpret_call state callee_value arg_values in
       state
-  | StatementReturn (Some expr) ->
+  | Return (Elist [ expr ]) ->
       assert (is_in_call state);
       let state, value = interpret_expression state expr in
       { state with return = Some (Some value) }
-  | StatementReturn None ->
+  | Return (Elist []) ->
       assert (is_in_call state);
       { state with return = Some None }
+  | _ ->
+      Lua_parser.Pp_ast.pp_ast_show stmt;
+      failwith "unsupported statement"
 
 and interpret_call (state : state) (callee : any_value) (args : any_value list)
     : state * any_value option =
@@ -203,7 +224,12 @@ and interpret_call (state : state) (callee : any_value) (args : any_value list)
   ( { state with scopes = old_scopes; return = None },
     Option.value state.return ~default:None )
 
-let debug_program (state : state) (program : program) =
+let debug_program (state : state) (program : ast) =
+  let program =
+    match program with
+    | Slist program -> program
+    | _ -> failwith "expected SList"
+  in
   let state =
     List.fold_left
       (fun state stmt ->
@@ -213,53 +239,11 @@ let debug_program (state : state) (program : program) =
   in
   print_endline (show_state state)
 
-let example_program : program =
-  [
-    StatmentAssignment (Identifier "x", ExpressionNumber (pico_number_of_int 0));
-    StatmentAssignment (Identifier "y", ExpressionNumber (pico_number_of_int 7));
-    StatementFunction
-      ( Identifier "g",
-        [
-          StatmentAssignment
-            (Identifier "y", ExpressionNumber (pico_number_of_int 6));
-          StatementLocal
-            (Identifier "y", Some (ExpressionNumber (pico_number_of_int 4)));
-          StatementLocal
-            ( Identifier "f",
-              Some
-                (ExpressionFunction
-                   [
-                     StatementCall
-                       ( ExpressionIdentifier (Identifier "print"),
-                         [ ExpressionIdentifier (Identifier "y") ] );
-                     StatmentAssignment
-                       (Identifier "y", ExpressionNumber (pico_number_of_int 3));
-                   ]) );
-          StatementLocal
-            ( Identifier "h",
-              Some
-                (ExpressionFunction
-                   [
-                     StatementCall (ExpressionIdentifier (Identifier "f"), []);
-                     StatementCall
-                       ( ExpressionIdentifier (Identifier "print"),
-                         [ ExpressionIdentifier (Identifier "y") ] );
-                   ]) );
-          StatmentAssignment
-            (Identifier "y", ExpressionNumber (pico_number_of_int 5));
-          StatementReturn (Some (ExpressionIdentifier (Identifier "h")));
-        ] );
-    StatementCall
-      ( ExpressionIdentifier (Identifier "print"),
-        [ ExpressionIdentifier (Identifier "y") ] );
-    StatmentAssignment
-      ( Identifier "f",
-        ExpressionCall (ExpressionIdentifier (Identifier "g"), []) );
-    StatementCall (ExpressionIdentifier (Identifier "f"), []);
-    StatementCall
-      ( ExpressionIdentifier (Identifier "print"),
-        [ ExpressionIdentifier (Identifier "y") ] );
-  ]
+let example_program =
+  BatFile.with_file_in "celeste-short.lua" (fun f ->
+      f |> Batteries.IO.to_input_channel |> Lua_parser.Parse.parse_from_chan)
+
+let () = Lua_parser.Pp_ast.pp_ast_show example_program
 
 let builtin_print =
   Builtin
