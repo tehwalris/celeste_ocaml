@@ -47,14 +47,14 @@ type expression =
   | ExpressionTable of (identifier * expression) list
   | ExpressionFunction of statement list
   | ExpressionIdentifier of identifier
-  | ExpressionCall of expression
+  | ExpressionCall of expression * expression list
 [@@deriving show]
 
 and statement =
   | StatmentAssignment of identifier * expression
   | StatementLocal of identifier * expression option
   | StatementFunction of identifier * statement list
-  | StatementCall of identifier
+  | StatementCall of expression * expression list
   | StatementReturn of expression option
 [@@deriving show] [@@deriving show]
 
@@ -135,9 +135,12 @@ let rec interpret_expression (state : state) (expr : expression) :
       allocate (ObjectTable value_map) state
   | ExpressionFunction body -> allocate (Function (body, state.scopes)) state
   | ExpressionIdentifier (Identifier name) -> (state, get_by_scope name state)
-  | ExpressionCall callee_expr ->
+  | ExpressionCall (callee_expr, arg_exprs) ->
       let state, callee_value = interpret_expression state callee_expr in
-      let state, return_value = interpret_call state callee_value in
+      let state, arg_values =
+        List.fold_left_map interpret_expression state arg_exprs
+      in
+      let state, return_value = interpret_call state callee_value arg_values in
       (state, Option.get return_value)
 
 and interpret_statement (state : state) (stmt : statement) : state =
@@ -158,9 +161,12 @@ and interpret_statement (state : state) (stmt : statement) : state =
   | StatementFunction (name, body) ->
       interpret_statement state
         (StatmentAssignment (name, ExpressionFunction body))
-  | StatementCall (Identifier callee_name) ->
-      let callee_value = get_by_scope callee_name state in
-      let state, _ = interpret_call state callee_value in
+  | StatementCall (callee_expr, arg_exprs) ->
+      let state, callee_value = interpret_expression state callee_expr in
+      let state, arg_values =
+        List.fold_left_map interpret_expression state arg_exprs
+      in
+      let state, _ = interpret_call state callee_value arg_values in
       state
   | StatementReturn (Some expr) ->
       assert (is_in_call state);
@@ -170,8 +176,8 @@ and interpret_statement (state : state) (stmt : statement) : state =
       assert (is_in_call state);
       { state with return = Some None }
 
-and interpret_call (state : state) (callee : any_value) :
-    state * any_value option =
+and interpret_call (state : state) (callee : any_value) (args : any_value list)
+    : state * any_value option =
   assert (state.return == None);
   let ref =
     match callee with
@@ -191,7 +197,7 @@ and interpret_call (state : state) (callee : any_value) :
         List.fold_left interpret_unless_returned
           { state with scopes = (scope_ref, StringSet.empty) :: scopes }
           body
-    | Builtin f -> f state []
+    | Builtin f -> f state args
     | _ -> failwith "callee is not a function"
   in
   ( { state with scopes = old_scopes; return = None },
@@ -223,7 +229,9 @@ let example_program : program =
               Some
                 (ExpressionFunction
                    [
-                     StatementCall (Identifier "print");
+                     StatementCall
+                       ( ExpressionIdentifier (Identifier "print"),
+                         [ ExpressionIdentifier (Identifier "y") ] );
                      StatmentAssignment
                        (Identifier "y", ExpressionNumber (pico_number_of_int 3));
                    ]) );
@@ -232,16 +240,25 @@ let example_program : program =
               Some
                 (ExpressionFunction
                    [
-                     StatementCall (Identifier "f");
-                     StatementCall (Identifier "print");
+                     StatementCall (ExpressionIdentifier (Identifier "f"), []);
+                     StatementCall
+                       ( ExpressionIdentifier (Identifier "print"),
+                         [ ExpressionIdentifier (Identifier "y") ] );
                    ]) );
           StatmentAssignment
             (Identifier "y", ExpressionNumber (pico_number_of_int 5));
           StatementReturn (Some (ExpressionIdentifier (Identifier "h")));
         ] );
-    StatementCall (Identifier "print");
+    StatementCall
+      ( ExpressionIdentifier (Identifier "print"),
+        [ ExpressionIdentifier (Identifier "y") ] );
     StatmentAssignment
-      (Identifier "f", ExpressionCall (ExpressionIdentifier (Identifier "g")));
+      ( Identifier "f",
+        ExpressionCall (ExpressionIdentifier (Identifier "g"), []) );
+    StatementCall (ExpressionIdentifier (Identifier "f"), []);
+    StatementCall
+      ( ExpressionIdentifier (Identifier "print"),
+        [ ExpressionIdentifier (Identifier "y") ] );
   ]
 
 let builtin_print =
