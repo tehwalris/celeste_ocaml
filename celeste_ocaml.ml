@@ -63,7 +63,7 @@ type heap_value =
   | ArrayTable of array_table
   | ObjectTable of object_table
   | UnknownTable
-  | Function of ast list * scope list
+  | Function of string list * ast list * scope list
   | Builtin of (state -> any_value list -> state)
 [@@deriving show]
 
@@ -115,6 +115,10 @@ let add_local (name : string) ((ref, names) : scope) : scope =
 
 let is_in_call (state : state) : bool = List.length state.scopes != 0
 
+let pad_or_drop p n l =
+  if List.length l > n then BatList.take n l
+  else l @ List.init (n - List.length l) (fun _ -> p)
+
 let rec interpret_expression (state : state) (expr : ast) : state * any_value =
   match expr with
   | Number n ->
@@ -122,6 +126,7 @@ let rec interpret_expression (state : state) (expr : ast) : state * any_value =
         Concrete (ConcreteNumber (n |> int_of_string |> pico_number_of_int)) )
   | Bool "true" -> (state, Concrete (ConcreteBoolean true))
   | Bool "false" -> (state, Concrete (ConcreteBoolean false))
+  | Bool "nil" -> (state, Concrete ConcreteNil)
   | Ident name -> (state, get_by_scope name state)
   | Table (Elist []) -> allocate UnknownTable state
   | Table (Elist initializer_asts) ->
@@ -146,8 +151,14 @@ let rec interpret_expression (state : state) (expr : ast) : state * any_value =
         |> List.to_seq |> StringMap.of_seq
       in
       allocate (ObjectTable value_map) state
-  | FunctionE (Fbody (Elist [], Slist body)) ->
-      allocate (Function (body, state.scopes)) state
+  | FunctionE (Fbody (Elist params, Slist body)) ->
+      let params =
+        List.map
+          (function
+            | Ident name -> name | _ -> "unsupported function parameter")
+          params
+      in
+      allocate (Function (params, body, state.scopes)) state
   | Clist [ callee_expr; Args (Elist arg_exprs) ] ->
       let state, callee_value = interpret_expression state callee_expr in
       let state, arg_values =
@@ -214,10 +225,23 @@ and interpret_call (state : state) (callee : any_value) (args : any_value list)
   in
   let state =
     match List.nth state.heap ref with
-    | Function (body, scopes) ->
-        List.fold_left interpret_unless_returned
-          { state with scopes = (scope_ref, StringSet.empty) :: scopes }
-          body
+    | Function (params, body, scopes) ->
+        let args =
+          pad_or_drop (Concrete ConcreteNil) (List.length params) args
+        in
+        let state =
+          {
+            state with
+            scopes = (scope_ref, StringSet.of_list params) :: scopes;
+          }
+        in
+        let state =
+          List.fold_left2
+            (fun state name value -> set_by_scope name value state)
+            state params args
+        in
+        let state = List.fold_left interpret_unless_returned state body in
+        state
     | Builtin f -> f state args
     | _ -> failwith "callee is not a function"
   in
@@ -240,7 +264,7 @@ let debug_program (state : state) (program : ast) =
   print_endline (show_state state)
 
 let example_program =
-  BatFile.with_file_in "celeste-short.lua" (fun f ->
+  BatFile.with_file_in "scopes.lua" (fun f ->
       f |> Batteries.IO.to_input_channel |> Lua_parser.Parse.parse_from_chan)
 
 let () = Lua_parser.Pp_ast.pp_ast_show example_program
