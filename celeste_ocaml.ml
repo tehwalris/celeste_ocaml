@@ -1,4 +1,5 @@
 module StringMap = Map.Make (String)
+module StringSet = Set.Make (String)
 
 type pico_number = Int32.t [@@deriving show]
 
@@ -31,39 +32,60 @@ let pp_object_table (f : Format.formatter) (_t : object_table) =
           (fun (k, v) -> k ^ " = " ^ show_any_value v)
           (StringMap.to_seq _t)))
 
-type heap_value =
-  | ArrayTable of array_table
-  | ObjectTable of object_table
-  | UnknownTable
-[@@deriving show]
+type scope = int * StringSet.t
 
-type state = { heap : heap_value list } [@@deriving show]
+let pp_scope (f : Format.formatter) ((ref, values) : scope) =
+  Format.fprintf f "{ %d %s }" ref
+    (Seq.fold_left (fun a b -> a ^ "; " ^ b) "" (StringSet.to_seq values))
+
 type identifier = Identifier of string [@@deriving show]
 
 type expression =
   | ExpressionNumber of pico_number
   | ExpressionBoolean of bool
   | ExpressionTable of (identifier * expression) list
+  | ExpressionFunction of statement list
 [@@deriving show]
 
-type statement = StatmentAssignment of identifier * expression
+and statement =
+  | StatmentAssignment of identifier * expression
+  | StatementLocal of identifier * expression option
 [@@deriving show]
 
+type heap_value =
+  | ArrayTable of array_table
+  | ObjectTable of object_table
+  | UnknownTable
+  | Function of statement list * scope list
+[@@deriving show]
+
+type state = { heap : heap_value list; scopes : scope list } [@@deriving show]
 type program = statement list [@@deriving show]
 
-let get_global (state : state) : object_table =
-  match state.heap with
-  | ObjectTable t :: _ -> t
-  | _ -> raise (Failure "global table not found")
+let resolve_scope (name : string) (scopes : scope list) : int option =
+  scopes
+  |> List.find_opt (fun (_, names) -> StringSet.mem name names)
+  |> Option.map (fun (ref, _) -> ref)
 
-let map_global f (state : state) : state =
-  match state.heap with
-  | ObjectTable t :: tail -> { heap = ObjectTable (f t) :: tail }
-  | _ -> raise (Failure "global table not found")
+let map_ith i cb l =
+  assert (i >= 0 && i < List.length l);
+  List.mapi (fun j v -> if i == j then cb v else v) l
+
+let set_by_scope (name : string) (value : any_value) (state : state) : state =
+  let update_table = function
+    | ObjectTable o -> ObjectTable (StringMap.add name value o)
+    | _ -> failwith "scope references something that's not an ObjectTable"
+  in
+  let ref = Option.value (resolve_scope name state.scopes) ~default:0 in
+  { state with heap = map_ith ref update_table state.heap }
+
+let allocate_raw o state =
+  let i = List.length state.heap in
+  let state = { state with heap = state.heap @ [ o ] } in
+  (state, i)
 
 let allocate o state =
-  let i = List.length state.heap in
-  let state = { heap = state.heap @ [ o ] } in
+  let state, i = allocate_raw o state in
   (state, Concrete (ConcreteReference i))
 
 let rec interpret_expression (state : state) (expr : expression) :
@@ -85,12 +107,25 @@ let rec interpret_expression (state : state) (expr : expression) :
         |> List.to_seq |> StringMap.of_seq
       in
       allocate (ObjectTable value_map) state
+  | ExpressionFunction body -> allocate (Function (body, state.scopes)) state
 
-let interpret_statement (state : state) (stmt : statement) : state =
+let add_local (name : string) ((ref, names) : scope) : scope =
+  (ref, StringSet.add name names)
+
+let rec interpret_statement (state : state) (stmt : statement) : state =
   match stmt with
   | StatmentAssignment (Identifier name, expr) ->
       let state, value = interpret_expression state expr in
-      map_global (StringMap.add name value) state
+      set_by_scope name value state
+  | StatementLocal (name, Some expr) ->
+      let state = interpret_statement state (StatementLocal (name, None)) in
+      let state = interpret_statement state (StatmentAssignment (name, expr)) in
+      state
+  | StatementLocal (Identifier name, None) ->
+      {
+        state with
+        scopes = add_local name (List.hd state.scopes) :: List.tl state.scopes;
+      }
 
 let debug_program (state : state) (program : program) =
   let state =
@@ -115,4 +150,6 @@ let example_program : program =
   ]
 
 let () =
-  debug_program { heap = [ ObjectTable StringMap.empty ] } example_program
+  debug_program
+    { heap = [ ObjectTable StringMap.empty ]; scopes = [] }
+    example_program
