@@ -63,9 +63,10 @@ type heap_value =
   | ObjectTable of object_table
   | UnknownTable
   | Function of statement list * scope list
+  | Builtin of (state -> any_value list -> state)
 [@@deriving show]
 
-type state = {
+and state = {
   heap : heap_value list;
   scopes : scope list;
   return : any_value option option;
@@ -190,6 +191,7 @@ and interpret_call (state : state) (callee : any_value) :
         List.fold_left interpret_unless_returned
           { state with scopes = (scope_ref, StringSet.empty) :: scopes }
           body
+    | Builtin f -> f state []
     | _ -> failwith "callee is not a function"
   in
   ( { state with scopes = old_scopes; return = None },
@@ -242,7 +244,18 @@ let example_program : program =
       (Identifier "f", ExpressionCall (ExpressionIdentifier (Identifier "g")));
   ]
 
-let () =
-  debug_program
+let builtin_print =
+  Builtin
+    (fun state args ->
+      List.iter (fun v -> print_endline (show_any_value v)) args;
+      state)
+
+let initial_state =
+  let state =
     { heap = [ ObjectTable StringMap.empty ]; scopes = []; return = None }
-    example_program
+  in
+  let state, ref = allocate builtin_print state in
+  let state = set_by_scope "print" ref state in
+  state
+
+let () = debug_program initial_state example_program
