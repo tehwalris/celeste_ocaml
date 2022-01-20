@@ -31,7 +31,10 @@ let pp_object_table (f : Format.formatter) (_t : object_table) =
           (fun (k, v) -> k ^ " = " ^ show_any_value v)
           (StringMap.to_seq _t)))
 
-type heap_value = ArrayTable of array_table | ObjectTable of object_table
+type heap_value =
+  | ArrayTable of array_table
+  | ObjectTable of object_table
+  | UnknownTable
 [@@deriving show]
 
 type state = { heap : heap_value list } [@@deriving show]
@@ -58,11 +61,17 @@ let map_global f (state : state) : state =
   | ObjectTable t :: tail -> { heap = ObjectTable (f t) :: tail }
   | _ -> raise (Failure "global table not found")
 
+let allocate o state =
+  let i = List.length state.heap in
+  let state = { heap = state.heap @ [ o ] } in
+  (state, Concrete (ConcreteReference i))
+
 let rec interpret_expression (state : state) (expr : expression) :
     state * any_value =
   match expr with
   | ExpressionNumber n -> (state, Concrete (ConcreteNumber n))
   | ExpressionBoolean b -> (state, Concrete (ConcreteBoolean b))
+  | ExpressionTable [] -> allocate UnknownTable state
   | ExpressionTable initializers ->
       let state, initializer_values =
         List.fold_left_map
@@ -75,9 +84,7 @@ let rec interpret_expression (state : state) (expr : expression) :
           initializers initializer_values
         |> List.to_seq |> StringMap.of_seq
       in
-      let i = List.length state.heap in
-      let state = { heap = state.heap @ [ ObjectTable value_map ] } in
-      (state, Concrete (ConcreteReference i))
+      allocate (ObjectTable value_map) state
 
 let interpret_statement (state : state) (stmt : statement) : state =
   match stmt with
@@ -98,22 +105,13 @@ let debug_program (state : state) (program : program) =
 let example_program : program =
   [
     StatmentAssignment
-      (Identifier "a", ExpressionNumber (pico_number_of_int 123));
-    StatmentAssignment
-      (Identifier "b", ExpressionNumber (pico_number_of_int 456));
-    StatmentAssignment (Identifier "a", ExpressionNumber (pico_number_of_int 0));
-    StatmentAssignment (Identifier "b", ExpressionBoolean true);
-    StatmentAssignment (Identifier "c", ExpressionTable []);
-    StatmentAssignment (Identifier "d", ExpressionTable []);
-    StatmentAssignment
-      ( Identifier "d",
+      ( Identifier "room",
         ExpressionTable
           [
-            (Identifier "test", ExpressionBoolean true);
-            ( Identifier "test2",
-              ExpressionTable [ (Identifier "inner", ExpressionBoolean false) ]
-            );
+            (Identifier "x", ExpressionNumber (pico_number_of_int 0));
+            (Identifier "y", ExpressionNumber (pico_number_of_int 0));
           ] );
+    StatmentAssignment (Identifier "objects", ExpressionTable []);
   ]
 
 let () =
