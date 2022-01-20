@@ -10,6 +10,7 @@ type concrete_value =
   | ConcreteNumber of pico_number
   | ConcreteBoolean of bool
   | ConcreteReference of int
+  | ConcreteNil
 [@@deriving show]
 
 type abstract_value =
@@ -45,6 +46,8 @@ type expression =
   | ExpressionBoolean of bool
   | ExpressionTable of (identifier * expression) list
   | ExpressionFunction of statement list
+  | ExpressionIdentifier of identifier
+  | ExpressionCall of expression
 [@@deriving show]
 
 and statement =
@@ -52,6 +55,7 @@ and statement =
   | StatementLocal of identifier * expression option
   | StatementFunction of identifier * statement list
   | StatementCall of identifier
+  | StatementReturn of expression option
 [@@deriving show] [@@deriving show]
 
 type heap_value =
@@ -61,7 +65,13 @@ type heap_value =
   | Function of statement list * scope list
 [@@deriving show]
 
-type state = { heap : heap_value list; scopes : scope list } [@@deriving show]
+type state = {
+  heap : heap_value list;
+  scopes : scope list;
+  return : any_value option option;
+}
+[@@deriving show]
+
 type program = statement list [@@deriving show]
 
 let resolve_scope (name : string) (scopes : scope list) : int option =
@@ -76,7 +86,9 @@ let map_ith i cb l =
 let get_by_scope (name : string) (state : state) : any_value =
   let ref = Option.value (resolve_scope name state.scopes) ~default:0 in
   match List.nth state.heap ref with
-  | ObjectTable scope -> StringMap.find name scope
+  | ObjectTable scope ->
+      StringMap.find_opt name scope
+      |> Option.value ~default:(Concrete ConcreteNil)
   | _ -> failwith "scope references something that's not an ObjectTable"
 
 let set_by_scope (name : string) (value : any_value) (state : state) : state =
@@ -95,6 +107,11 @@ let allocate_raw o state =
 let allocate o state =
   let state, i = allocate_raw o state in
   (state, Concrete (ConcreteReference i))
+
+let add_local (name : string) ((ref, names) : scope) : scope =
+  (ref, StringSet.add name names)
+
+let is_in_call (state : state) : bool = List.length state.scopes != 0
 
 let rec interpret_expression (state : state) (expr : expression) :
     state * any_value =
@@ -116,11 +133,14 @@ let rec interpret_expression (state : state) (expr : expression) :
       in
       allocate (ObjectTable value_map) state
   | ExpressionFunction body -> allocate (Function (body, state.scopes)) state
+  | ExpressionIdentifier (Identifier name) -> (state, get_by_scope name state)
+  | ExpressionCall callee_expr ->
+      let state, callee_value = interpret_expression state callee_expr in
+      let state, return_value = interpret_call state callee_value in
+      (state, Option.get return_value)
 
-let add_local (name : string) ((ref, names) : scope) : scope =
-  (ref, StringSet.add name names)
-
-let rec interpret_statement (state : state) (stmt : statement) : state =
+and interpret_statement (state : state) (stmt : statement) : state =
+  assert (state.return == None);
   match stmt with
   | StatmentAssignment (Identifier name, expr) ->
       let state, value = interpret_expression state expr in
@@ -137,23 +157,43 @@ let rec interpret_statement (state : state) (stmt : statement) : state =
   | StatementFunction (name, body) ->
       interpret_statement state
         (StatmentAssignment (name, ExpressionFunction body))
-  | StatementCall (Identifier name) ->
-      let ref =
-        match get_by_scope name state with
-        | Concrete (ConcreteReference ref) -> ref
-        | _ -> failwith "callee is not a concrete reference"
-      in
-      let old_scopes = state.scopes in
-      let state, scope_ref = allocate_raw (ObjectTable StringMap.empty) state in
-      let state =
-        match List.nth state.heap ref with
-        | Function (body, scopes) ->
-            List.fold_left interpret_statement
-              { state with scopes = (scope_ref, StringSet.empty) :: scopes }
-              body
-        | _ -> failwith "callee is not a function"
-      in
-      { state with scopes = old_scopes }
+  | StatementCall (Identifier callee_name) ->
+      let callee_value = get_by_scope callee_name state in
+      let state, _ = interpret_call state callee_value in
+      state
+  | StatementReturn (Some expr) ->
+      assert (is_in_call state);
+      let state, value = interpret_expression state expr in
+      { state with return = Some (Some value) }
+  | StatementReturn None ->
+      assert (is_in_call state);
+      { state with return = Some None }
+
+and interpret_call (state : state) (callee : any_value) :
+    state * any_value option =
+  assert (state.return == None);
+  let ref =
+    match callee with
+    | Concrete (ConcreteReference ref) -> ref
+    | _ -> failwith "callee is not a concrete reference"
+  in
+  let old_scopes = state.scopes in
+  let state, scope_ref = allocate_raw (ObjectTable StringMap.empty) state in
+  let interpret_unless_returned state stmt =
+    match state.return with
+    | Some _ -> state
+    | None -> interpret_statement state stmt
+  in
+  let state =
+    match List.nth state.heap ref with
+    | Function (body, scopes) ->
+        List.fold_left interpret_unless_returned
+          { state with scopes = (scope_ref, StringSet.empty) :: scopes }
+          body
+    | _ -> failwith "callee is not a function"
+  in
+  ( { state with scopes = old_scopes; return = None },
+    Option.value state.return ~default:None )
 
 let debug_program (state : state) (program : program) =
   let state =
@@ -176,11 +216,33 @@ let example_program : program =
             (Identifier "y", ExpressionNumber (pico_number_of_int 6));
           StatementLocal
             (Identifier "y", Some (ExpressionNumber (pico_number_of_int 4)));
+          StatementLocal
+            ( Identifier "f",
+              Some
+                (ExpressionFunction
+                   [
+                     StatementCall (Identifier "print");
+                     StatmentAssignment
+                       (Identifier "y", ExpressionNumber (pico_number_of_int 3));
+                   ]) );
+          StatementLocal
+            ( Identifier "h",
+              Some
+                (ExpressionFunction
+                   [
+                     StatementCall (Identifier "f");
+                     StatementCall (Identifier "print");
+                   ]) );
+          StatmentAssignment
+            (Identifier "y", ExpressionNumber (pico_number_of_int 5));
+          StatementReturn (Some (ExpressionIdentifier (Identifier "h")));
         ] );
-    StatementCall (Identifier "g");
+    StatementCall (Identifier "print");
+    StatmentAssignment
+      (Identifier "f", ExpressionCall (ExpressionIdentifier (Identifier "g")));
   ]
 
 let () =
   debug_program
-    { heap = [ ObjectTable StringMap.empty ]; scopes = [] }
+    { heap = [ ObjectTable StringMap.empty ]; scopes = []; return = None }
     example_program
