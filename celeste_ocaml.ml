@@ -50,7 +50,9 @@ type expression =
 and statement =
   | StatmentAssignment of identifier * expression
   | StatementLocal of identifier * expression option
-[@@deriving show]
+  | StatementFunction of identifier * statement list
+  | StatementCall of identifier
+[@@deriving show] [@@deriving show]
 
 type heap_value =
   | ArrayTable of array_table
@@ -70,6 +72,12 @@ let resolve_scope (name : string) (scopes : scope list) : int option =
 let map_ith i cb l =
   assert (i >= 0 && i < List.length l);
   List.mapi (fun j v -> if i == j then cb v else v) l
+
+let get_by_scope (name : string) (state : state) : any_value =
+  let ref = Option.value (resolve_scope name state.scopes) ~default:0 in
+  match List.nth state.heap ref with
+  | ObjectTable scope -> StringMap.find name scope
+  | _ -> failwith "scope references something that's not an ObjectTable"
 
 let set_by_scope (name : string) (value : any_value) (state : state) : state =
   let update_table = function
@@ -126,6 +134,26 @@ let rec interpret_statement (state : state) (stmt : statement) : state =
         state with
         scopes = add_local name (List.hd state.scopes) :: List.tl state.scopes;
       }
+  | StatementFunction (name, body) ->
+      interpret_statement state
+        (StatmentAssignment (name, ExpressionFunction body))
+  | StatementCall (Identifier name) ->
+      let ref =
+        match get_by_scope name state with
+        | Concrete (ConcreteReference ref) -> ref
+        | _ -> failwith "callee is not a concrete reference"
+      in
+      let old_scopes = state.scopes in
+      let state, scope_ref = allocate_raw (ObjectTable StringMap.empty) state in
+      let state =
+        match List.nth state.heap ref with
+        | Function (body, scopes) ->
+            List.fold_left interpret_statement
+              { state with scopes = (scope_ref, StringSet.empty) :: scopes }
+              body
+        | _ -> failwith "callee is not a function"
+      in
+      { state with scopes = old_scopes }
 
 let debug_program (state : state) (program : program) =
   let state =
@@ -139,14 +167,17 @@ let debug_program (state : state) (program : program) =
 
 let example_program : program =
   [
-    StatmentAssignment
-      ( Identifier "room",
-        ExpressionTable
-          [
-            (Identifier "x", ExpressionNumber (pico_number_of_int 0));
-            (Identifier "y", ExpressionNumber (pico_number_of_int 0));
-          ] );
-    StatmentAssignment (Identifier "objects", ExpressionTable []);
+    StatmentAssignment (Identifier "x", ExpressionNumber (pico_number_of_int 0));
+    StatmentAssignment (Identifier "y", ExpressionNumber (pico_number_of_int 7));
+    StatementFunction
+      ( Identifier "g",
+        [
+          StatmentAssignment
+            (Identifier "y", ExpressionNumber (pico_number_of_int 6));
+          StatementLocal
+            (Identifier "y", Some (ExpressionNumber (pico_number_of_int 4)));
+        ] );
+    StatementCall (Identifier "g");
   ]
 
 let () =
