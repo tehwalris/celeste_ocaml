@@ -34,7 +34,7 @@ let pp_object_table (f : Format.formatter) (_t : object_table) =
 type heap_value = ArrayTable of array_table | ObjectTable of object_table
 [@@deriving show]
 
-type state = { global : object_table; heap : heap_value list } [@@deriving show]
+type state = { heap : heap_value list } [@@deriving show]
 type identifier = Identifier of string [@@deriving show]
 
 type expression =
@@ -48,8 +48,15 @@ type statement = StatmentAssignment of identifier * expression
 
 type program = statement list [@@deriving show]
 
-let set_global_variable (name : string) (value : any_value) (state : state) =
-  { state with global = StringMap.add name value state.global }
+let get_global (state : state) : object_table =
+  match state.heap with
+  | ObjectTable t :: _ -> t
+  | _ -> raise (Failure "global table not found")
+
+let map_global f (state : state) : state =
+  match state.heap with
+  | ObjectTable t :: tail -> { heap = ObjectTable (f t) :: tail }
+  | _ -> raise (Failure "global table not found")
 
 let rec interpret_expression (state : state) (expr : expression) :
     state * any_value =
@@ -69,16 +76,14 @@ let rec interpret_expression (state : state) (expr : expression) :
         |> List.to_seq |> StringMap.of_seq
       in
       let i = List.length state.heap in
-      let state =
-        { state with heap = state.heap @ [ ObjectTable value_map ] }
-      in
+      let state = { heap = state.heap @ [ ObjectTable value_map ] } in
       (state, Concrete (ConcreteReference i))
 
 let interpret_statement (state : state) (stmt : statement) : state =
   match stmt with
   | StatmentAssignment (Identifier name, expr) ->
       let state, value = interpret_expression state expr in
-      { state with global = StringMap.add name value state.global }
+      map_global (StringMap.add name value) state
 
 let debug_program (state : state) (program : program) =
   let state =
@@ -111,4 +116,5 @@ let example_program : program =
           ] );
   ]
 
-let () = debug_program { global = StringMap.empty; heap = [] } example_program
+let () =
+  debug_program { heap = [ ObjectTable StringMap.empty ] } example_program
