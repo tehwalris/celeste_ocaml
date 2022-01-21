@@ -6,6 +6,7 @@ type pico_number = Int32.t [@@deriving show]
 
 (* TODO use the top 16 bits for integers *)
 let pico_number_of_int (n : int) : pico_number = Int32.of_int n
+let int_of_pico_number (n : pico_number) : int = Int32.to_int n
 
 type concrete_value =
   | ConcreteNumber of pico_number
@@ -119,6 +120,11 @@ let pad_or_drop p n l =
   if List.length l > n then BatList.take n l
   else l @ List.init (n - List.length l) (fun _ -> p)
 
+let int_of_any_value v =
+  match v with
+  | Concrete (ConcreteNumber n) -> int_of_pico_number n
+  | _ -> failwith "i_from is not an integer"
+
 let rec interpret_expression (state : state) (expr : ast) : state * any_value =
   match expr with
   | Number n ->
@@ -166,14 +172,34 @@ let rec interpret_expression (state : state) (expr : ast) : state * any_value =
       in
       let state, return_value = interpret_call state callee_value arg_values in
       (state, Option.get return_value)
+  | Binop (op, left, right) ->
+      let state, left = interpret_expression state left in
+      let state, right = interpret_expression state right in
+      (state, interpret_binop state op left right)
   | _ ->
       Lua_parser.Pp_ast.pp_ast_show expr;
       failwith "unsupported expression"
+
+and interpret_binop (state : state) (op : string) (left : any_value)
+    (right : any_value) : any_value =
+  match (op, left, right) with
+  | "+", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
+      Concrete (ConcreteNumber (Int32.add left right))
+  | ( "+",
+      Concrete (ConcreteNumber left),
+      Abstract (AbstractNumberRange (right_min, right_max)) ) ->
+      Abstract
+        (AbstractNumberRange (Int32.add left right_min, Int32.add left right_max))
+  | _ ->
+      failwith
+        (Printf.sprintf "unsupported op: %s %s %s" (show_any_value left) op
+           (show_any_value right))
 
 and interpret_statement (state : state) (stmt : ast) : state =
   assert (state.return == None);
   match stmt with
   | Assign (Elist [ Ident name ], Elist [ expr ]) ->
+      assert (not @@ String.starts_with ~prefix:"__" name);
       let state, value = interpret_expression state expr in
       set_by_scope name value state
   | Lassign (Elist [ Ident name ], expr) ->
@@ -204,6 +230,34 @@ and interpret_statement (state : state) (stmt : ast) : state =
   | Return (Elist []) ->
       assert (is_in_call state);
       { state with return = Some None }
+  | For1 (Ident i_name, i_from, i_to, Slist body) ->
+      let state, i_from = interpret_expression state i_from in
+      let i_from = int_of_any_value i_from in
+      let state, i_to = interpret_expression state i_to in
+      let i_to = int_of_any_value i_to in
+      assert (i_from <= i_to);
+      let i_values =
+        List.init
+          (i_to - i_from + 1)
+          (fun i -> Concrete (ConcreteNumber (pico_number_of_int (i_from + i))))
+      in
+      List.fold_left
+        (fun state i_value ->
+          let old_scopes = state.scopes in
+          let state, scope_ref =
+            allocate_raw
+              (ObjectTable (StringMap.singleton i_name i_value))
+              state
+          in
+          let state =
+            {
+              state with
+              scopes = (scope_ref, StringSet.singleton i_name) :: state.scopes;
+            }
+          in
+          let state = List.fold_left interpret_statement state body in
+          { state with scopes = old_scopes })
+        state i_values
   | _ ->
       Lua_parser.Pp_ast.pp_ast_show stmt;
       failwith "unsupported statement"
@@ -258,29 +312,54 @@ let debug_program (state : state) (program : ast) =
     List.fold_left
       (fun state stmt ->
         print_endline (show_state state);
+        print_endline "";
+        Lua_parser.Pp_lua.pp_lua stmt;
+        print_endline "\n";
         interpret_statement state stmt)
       state program
   in
   print_endline (show_state state)
 
 let example_program =
-  BatFile.with_file_in "scopes.lua" (fun f ->
+  BatFile.with_file_in "celeste-standard-syntax.lua" (fun f ->
       f |> Batteries.IO.to_input_channel |> Lua_parser.Parse.parse_from_chan)
 
 let () = Lua_parser.Pp_ast.pp_ast_show example_program
 
-let builtin_print =
-  Builtin
-    (fun state args ->
-      List.iter (fun v -> print_endline (show_any_value v)) args;
-      state)
+let return_from_builtin (value : any_value) (state : state) : state =
+  assert (state.return == None);
+  { state with return = Some (Some value) }
+
+let builtin_print state args =
+  List.iter (fun v -> print_endline (show_any_value v)) args;
+  state
+
+let builtin_add state args = failwith "TODO add"
+
+let builtin_rnd state args =
+  let max =
+    match args with
+    | [ Concrete (ConcreteNumber max) ] -> max
+    | _ -> failwith "bad arguments to rnd"
+  in
+  assert (max >= pico_number_of_int 0);
+  return_from_builtin
+    (Abstract (AbstractNumberRange (pico_number_of_int 0, max)))
+    state
 
 let initial_state =
   let state =
     { heap = [ ObjectTable StringMap.empty ]; scopes = []; return = None }
   in
-  let state, ref = allocate builtin_print state in
-  let state = set_by_scope "print" ref state in
+  let state =
+    List.fold_left
+      (fun state (name, f) ->
+        let state, ref = allocate (Builtin f) state in
+        let state = set_by_scope name ref state in
+        state)
+      state
+      [ ("print", builtin_print); ("add", builtin_add); ("rnd", builtin_rnd) ]
+  in
   state
 
 let () = debug_program initial_state example_program
