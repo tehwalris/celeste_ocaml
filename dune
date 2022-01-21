@@ -2,4 +2,4 @@
  (name celeste_ocaml)
  (libraries bigarray gmp apron apron.octD lua_parser.lib batteries)
  (preprocess
-  (pps ppx_deriving.show)))
+  (pps ppx_deriving.show ppx_deriving.eq)))

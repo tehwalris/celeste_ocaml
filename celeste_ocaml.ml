@@ -39,12 +39,14 @@ let int_of_pico_number (n : pico_number) : int =
   assert (fraction_int_of_pico_number n == 0);
   whole_int_of_pico_number n
 
+let equal_pico_number = Int32.equal
+
 type concrete_value =
   | ConcreteNumber of pico_number
   | ConcreteBoolean of bool
   | ConcreteReference of int
   | ConcreteNil
-[@@deriving show]
+[@@deriving show, eq]
 
 type abstract_value =
   | AbstractOneOf of concrete_value list
@@ -229,6 +231,9 @@ let rec interpret_expression (state : state) (expr : ast) :
       in
       let value = Option.value value ~default:(Concrete ConcreteNil) in
       (state, Some (lhs_ref, rhs_name), value)
+  | Unop (op, value) ->
+      let state, value = without_lhs interpret_expression state value in
+      (state, None, interpret_unop state op value)
   | Binop (op, left, right) ->
       let state, left = without_lhs interpret_expression state left in
       let state, right = without_lhs interpret_expression state right in
@@ -236,6 +241,12 @@ let rec interpret_expression (state : state) (expr : ast) :
   | _ ->
       Lua_parser.Pp_ast.pp_ast_show expr;
       failwith "unsupported expression"
+
+(* TODO WARNING some of these unop handlers probably have mistakes*)
+and interpret_unop (state : state) (op : string) (v : any_value) : any_value =
+  match (op, v) with
+  | "+", Concrete (ConcreteNumber v) -> Concrete (ConcreteNumber (Int32.neg v))
+  | _ -> failwith (Printf.sprintf "unsupported op: %s %s" op (show_any_value v))
 
 (* TODO WARNING some of these binop handlers probably have mistakes*)
 and interpret_binop (state : state) (op : string) (left : any_value)
@@ -255,6 +266,10 @@ and interpret_binop (state : state) (op : string) (left : any_value)
         (AbstractNumberRange (Int32.div left_min right, Int32.add left_max right))
   | "*", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
       Concrete (ConcreteNumber (Int32.mul left right))
+  | "==", Concrete left, Concrete right ->
+      Concrete (ConcreteBoolean (equal_concrete_value left right))
+  | "~=", Concrete left, Concrete right ->
+      Concrete (ConcreteBoolean (not @@ equal_concrete_value left right))
   | _ ->
       failwith
         (Printf.sprintf "unsupported op: %s %s %s" (show_any_value left) op
@@ -375,7 +390,7 @@ and interpret_statement (state : state) (stmt : ast) : state =
   | If4 (first_cond, first_body, Slist elseifs, else_body) ->
       interpret_statement state
         (If3
-           ( first_body,
+           ( first_cond,
              first_body,
              Slist (elseifs @ [ Elseif (Bool "true", else_body) ]) ))
   | _ ->
