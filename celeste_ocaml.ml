@@ -389,9 +389,27 @@ let debug_program (state : state) (program : ast) =
   in
   ignore @@ List.fold_left interpret_statement state program
 
+let rec parse_hex_bytes (s : char list) : int list =
+  match s with
+  | [] -> []
+  | a :: b :: tl ->
+      let v =
+        int_of_string ("0x" ^ ([ a; b ] |> List.to_seq |> String.of_seq))
+      in
+      assert (v >= 0 && v < 256);
+      v :: parse_hex_bytes tl
+  | _ -> failwith "uneven number of bytes"
+
 let example_program =
   BatFile.with_file_in "celeste-standard-syntax.lua" (fun f ->
       f |> Batteries.IO.to_input_channel |> Lua_parser.Parse.parse_from_chan)
+
+let map_data =
+  BatFile.with_file_in "map-data.txt" BatIO.read_all
+  |> Str.global_replace (Str.regexp "[^a-f0-9]") ""
+  |> String.to_seq |> List.of_seq |> parse_hex_bytes
+
+let () = assert (List.length map_data == 8192)
 
 let return_from_builtin (value : any_value) (state : state) : state =
   assert (state.return == None);
@@ -456,6 +474,19 @@ let builtin_foreach state args =
   in
   List.fold_left call_iteration state values
 
+let builtin_mget state args =
+  let x, y =
+    match args with
+    | [ Concrete (ConcreteNumber x); Concrete (ConcreteNumber y) ] -> (x, y)
+    | _ -> failwith "bad arguments to rnd"
+  in
+  let x = int_of_pico_number x in
+  assert (x >= 0 && x < 128);
+  let y = int_of_pico_number y in
+  assert (y >= 0 && y < 32);
+  let v = List.nth map_data (x + (y * 128)) in
+  return_from_builtin (Concrete (ConcreteNumber (pico_number_of_int v))) state
+
 let builtin_dead state args = state
 
 let initial_state =
@@ -475,6 +506,7 @@ let initial_state =
         ("rnd", builtin_rnd);
         ("flr", builtin_flr);
         ("foreach", builtin_foreach);
+        ("mget", builtin_mget);
         ("music", builtin_dead);
       ]
   in
