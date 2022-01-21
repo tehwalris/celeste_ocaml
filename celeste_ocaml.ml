@@ -574,6 +574,23 @@ and map_references_any_value f v : any_value =
   | Concrete v -> Concrete (map_references_concrete_value f v)
   | Abstract v -> Abstract (map_references_abstract_value f v)
 
+let show_heap_value_short v =
+  match v with
+  | ArrayTable values ->
+      Printf.sprintf "ArrayTable (%d elements)" (List.length values)
+  | ObjectTable values ->
+      Printf.sprintf "ObjectTable (%d elements)" (StringMap.cardinal values)
+  | UnknownTable -> "UnknownTable"
+  | Function (args, _, scopes) ->
+      Printf.sprintf "Function (%d args, %d scopes)" (List.length args)
+        (List.length scopes)
+  | Builtin _ -> "Builtin"
+
+let print_heap_short (heap : heap_value list) : unit =
+  List.iteri
+    (fun i v -> Printf.printf "%d: %s\n" i (show_heap_value_short v))
+    heap
+
 let interpret_program (state : state) (program : ast) : state =
   let program =
     match program with
@@ -750,6 +767,6 @@ let () =
   in
   let old_heap_size = List.length state.heap in
   let state = gc_state state in
-  print_endline @@ show_state state;
+  print_heap_short state.heap;
   Printf.printf "heap size before gc: %d\n" old_heap_size;
   Printf.printf "heap size after gc: %d\n" (List.length state.heap)
