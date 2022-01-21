@@ -651,9 +651,9 @@ let load_hex_file name size =
   let data =
     BatFile.with_file_in name BatIO.read_all
     |> Str.global_replace (Str.regexp "[^a-f0-9]") ""
-    |> String.to_seq |> List.of_seq |> parse_hex_bytes
+    |> String.to_seq |> List.of_seq |> parse_hex_bytes |> Array.of_list
   in
-  assert (List.length data = size);
+  assert (Array.length data = size);
   data
 
 let map_data = load_hex_file "map-data.txt" 8192
@@ -732,7 +732,7 @@ let builtin_mget _ state args =
   assert (x >= 0 && x < 128);
   let y = int_of_pico_number y in
   assert (y >= 0 && y < 32);
-  let v = List.nth map_data (x + (y * 128)) in
+  let v = Array.get map_data (x + (y * 128)) in
   return_from_builtin (Concrete (ConcreteNumber (pico_number_of_int v))) state
 
 let builtin_fget _ state args =
@@ -744,7 +744,7 @@ let builtin_fget _ state args =
   let i = int_of_pico_number i in
   let b = int_of_pico_number b in
   assert (b >= 0 && b < 8);
-  let v = List.nth flag_data i in
+  let v = Array.get flag_data i in
   return_from_builtin
     (Concrete (ConcreteBoolean (Int.logand v (Int.shift_left 1 b) != 0)))
     state
