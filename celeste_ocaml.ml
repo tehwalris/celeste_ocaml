@@ -2,11 +2,42 @@ open Lua_parser.Ast
 module StringMap = Map.Make (String)
 module StringSet = Set.Make (String)
 
+(* TODO WARNING some of these pico_number functions probably have mistakes*)
+
 type pico_number = Int32.t [@@deriving show]
 
-(* TODO use the top 16 bits for integers *)
-let pico_number_of_int (n : int) : pico_number = Int32.of_int n
-let int_of_pico_number (n : pico_number) : int = Int32.to_int n
+let whole_int_of_pico_number (n : pico_number) : int =
+  Int32.shift_right_logical n 16 |> Int32.to_int
+
+let fraction_int_of_pico_number (n : pico_number) : int =
+  Int32.shift_right_logical (Int32.shift_left n 16) 16 |> Int32.to_int
+
+let pp_pico_number (f : Format.formatter) (n : pico_number) =
+  Format.fprintf f "(pico_number %d + (%d / 65536))"
+    (whole_int_of_pico_number n)
+    (fraction_int_of_pico_number n)
+
+let pico_number_of_ints (whole_n : int) (fraction_n : int) : pico_number =
+  let pico_n =
+    Int32.logor
+      (Int32.shift_left (Int32.of_int whole_n) 16)
+      (Int32.of_int fraction_n)
+  in
+  assert (whole_int_of_pico_number pico_n == whole_n);
+  assert (fraction_int_of_pico_number pico_n == fraction_n);
+  pico_n
+
+let pico_number_of_int (n : int) : pico_number = pico_number_of_ints n 0
+
+let rec pico_number_of_float (n : float) : pico_number =
+  assert (n >= 0.);
+  pico_number_of_ints (int_of_float n) (int_of_float ((n -. floor n) *. 32767.))
+
+let pico_number_of_string n = n |> float_of_string |> pico_number_of_float
+
+let int_of_pico_number (n : pico_number) : int =
+  assert (fraction_int_of_pico_number n == 0);
+  whole_int_of_pico_number n
 
 type concrete_value =
   | ConcreteNumber of pico_number
@@ -127,9 +158,7 @@ let int_of_any_value v =
 
 let rec interpret_expression (state : state) (expr : ast) : state * any_value =
   match expr with
-  | Number n ->
-      ( state,
-        Concrete (ConcreteNumber (n |> int_of_string |> pico_number_of_int)) )
+  | Number n -> (state, Concrete (ConcreteNumber (pico_number_of_string n)))
   | Bool "true" -> (state, Concrete (ConcreteBoolean true))
   | Bool "false" -> (state, Concrete (ConcreteBoolean false))
   | Bool "nil" -> (state, Concrete ConcreteNil)
@@ -190,12 +219,19 @@ and interpret_binop (state : state) (op : string) (left : any_value)
       Abstract (AbstractNumberRange (right_min, right_max)) ) ->
       Abstract
         (AbstractNumberRange (Int32.add left right_min, Int32.add left right_max))
+  | ( "/",
+      Abstract (AbstractNumberRange (left_min, left_max)),
+      Concrete (ConcreteNumber right) ) ->
+      Abstract
+        (AbstractNumberRange (Int32.div left_min right, Int32.add left_max right))
   | _ ->
       failwith
         (Printf.sprintf "unsupported op: %s %s %s" (show_any_value left) op
            (show_any_value right))
 
 and interpret_statement (state : state) (stmt : ast) : state =
+  Lua_parser.Pp_lua.pp_lua stmt;
+  print_endline "";
   assert (state.return == None);
   match stmt with
   | Assign (Elist [ Ident name ], Elist [ expr ]) ->
@@ -308,23 +344,12 @@ let debug_program (state : state) (program : ast) =
     | Slist program -> program
     | _ -> failwith "expected SList"
   in
-  let state =
-    List.fold_left
-      (fun state stmt ->
-        print_endline (show_state state);
-        print_endline "";
-        Lua_parser.Pp_lua.pp_lua stmt;
-        print_endline "\n";
-        interpret_statement state stmt)
-      state program
-  in
-  print_endline (show_state state)
+  let state = List.fold_left interpret_statement state program in
+  ()
 
 let example_program =
   BatFile.with_file_in "celeste-standard-syntax.lua" (fun f ->
       f |> Batteries.IO.to_input_channel |> Lua_parser.Parse.parse_from_chan)
-
-let () = Lua_parser.Pp_ast.pp_ast_show example_program
 
 let return_from_builtin (value : any_value) (state : state) : state =
   assert (state.return == None);
@@ -334,7 +359,18 @@ let builtin_print state args =
   List.iter (fun v -> print_endline (show_any_value v)) args;
   state
 
-let builtin_add state args = failwith "TODO add"
+let builtin_add state args =
+  let target_ref, value =
+    match args with
+    | [ Concrete (ConcreteReference target_ref); value ] -> (target_ref, value)
+    | _ -> failwith "bad arguments to add"
+  in
+  let update_table = function
+    | ArrayTable values -> ArrayTable (values @ [ value ])
+    | UnknownTable -> ArrayTable [ value ]
+    | _ -> failwith "expected ArrayTable or UnknownTable"
+  in
+  { state with heap = map_ith target_ref update_table state.heap }
 
 let builtin_rnd state args =
   let max =
@@ -347,6 +383,39 @@ let builtin_rnd state args =
     (Abstract (AbstractNumberRange (pico_number_of_int 0, max)))
     state
 
+let builtin_flr state args =
+  let flr_pico (n : pico_number) : pico_number =
+    pico_number_of_ints (whole_int_of_pico_number n) 0
+  in
+  let result =
+    match args with
+    | [ Concrete (ConcreteNumber v) ] -> Concrete (ConcreteNumber (flr_pico v))
+    | [ Abstract (AbstractNumberRange (min, max)) ] ->
+        Abstract (AbstractNumberRange (flr_pico min, flr_pico max))
+    | _ -> failwith "bad arguments to flr"
+  in
+  return_from_builtin result state
+
+let builtin_foreach state args =
+  let table_ref, cb =
+    match args with
+    | [ Concrete (ConcreteReference target_ref); cb ] -> (target_ref, cb)
+    | _ -> failwith "bad arguments to add"
+  in
+  let values =
+    match List.nth state.heap table_ref with
+    | ArrayTable values -> values
+    | UnknownTable -> []
+    | _ -> failwith "expected ArrayTable or UnknownTable"
+  in
+  let call_iteration state value =
+    let state, _ = interpret_call state cb [ value ] in
+    state
+  in
+  List.fold_left call_iteration state values
+
+let builtin_dead state args = state
+
 let initial_state =
   let state =
     { heap = [ ObjectTable StringMap.empty ]; scopes = []; return = None }
@@ -358,7 +427,14 @@ let initial_state =
         let state = set_by_scope name ref state in
         state)
       state
-      [ ("print", builtin_print); ("add", builtin_add); ("rnd", builtin_rnd) ]
+      [
+        ("print", builtin_print);
+        ("add", builtin_add);
+        ("rnd", builtin_rnd);
+        ("flr", builtin_flr);
+        ("foreach", builtin_foreach);
+        ("music", builtin_dead);
+      ]
   in
   state
 
