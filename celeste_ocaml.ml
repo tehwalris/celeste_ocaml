@@ -337,6 +337,47 @@ and interpret_statement (state : state) (stmt : ast) : state =
           let state = List.fold_left interpret_statement state body in
           { state with scopes = old_scopes })
         state i_values
+  | If1 (cond, body) -> interpret_statement state (If2 (cond, body, Slist []))
+  | If2 (cond, then_body, else_body) ->
+      interpret_statement state
+        (If3 (cond, then_body, Slist [ Elseif (Bool "true", else_body) ]))
+  | If3 (first_cond, first_body, Slist elseifs) ->
+      let branches =
+        List.map
+          (function
+            | Elseif (cond, Slist body) -> (cond, body)
+            | _ -> failwith "expected Elseif")
+          (Elseif (first_cond, first_body) :: elseifs)
+      in
+      let interpret_condition state (cond, _) : state * (state * bool) =
+        let sate, value = without_lhs interpret_expression state cond in
+        let value =
+          match value with
+          | Concrete (ConcreteBoolean b) -> b
+          | _ -> failwith "if branch condition is not a ConcreteBoolean"
+        in
+        (state, (state, value))
+      in
+      let _, matches = List.fold_left_map interpret_condition state branches in
+      let state, _, body =
+        List.map2
+          (fun (state, did_match) (_, body) -> (state, did_match, body))
+          matches branches
+        |> List.find (fun (_, did_match, _) -> did_match)
+      in
+      let old_scopes = state.scopes in
+      let state, scope_ref = allocate_raw (ObjectTable StringMap.empty) state in
+      let state =
+        { state with scopes = (scope_ref, StringSet.empty) :: state.scopes }
+      in
+      let state = List.fold_left interpret_statement state body in
+      { state with scopes = old_scopes }
+  | If4 (first_cond, first_body, Slist elseifs, else_body) ->
+      interpret_statement state
+        (If3
+           ( first_body,
+             first_body,
+             Slist (elseifs @ [ Elseif (Bool "true", else_body) ]) ))
   | _ ->
       Lua_parser.Pp_ast.pp_ast_show stmt;
       failwith "unsupported statement"
