@@ -748,7 +748,8 @@ let () =
   let state =
     "_init()" |> Lua_parser.Parse.parse_from_string |> interpret_program state
   in
-  print_endline @@ show_state state;
-  Printf.printf "heap size before gc: %d\n" (List.length state.heap);
+  let old_heap_size = List.length state.heap in
   let state = gc_state state in
+  print_endline @@ show_state state;
+  Printf.printf "heap size before gc: %d\n" old_heap_size;
   Printf.printf "heap size after gc: %d\n" (List.length state.heap)
