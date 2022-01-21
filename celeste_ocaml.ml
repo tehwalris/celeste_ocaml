@@ -271,6 +271,7 @@ let rec interpret_expression (ctx : interpreter_context) (state : state)
       let state, left = interpret_rhs_expression ctx state left in
       let state, value = interpret_binop_maybe_short ctx state op left right in
       (state, None, value)
+  | Pexp expr -> interpret_expression ctx state expr
   | _ ->
       Lua_parser.Pp_ast.pp_ast_show expr;
       failwith "unsupported expression"
@@ -314,6 +315,8 @@ and interpret_binop_not_short (state : state) (op : string) (left : any_value)
         (AbstractNumberRange (Int32.add left right_min, Int32.add left right_max))
   | "-", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
       Concrete (ConcreteNumber (Int32.sub left right))
+  | "/", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
+      Concrete (ConcreteNumber (Int32.div left right))
   | ( "/",
       Abstract (AbstractNumberRange (left_min, left_max)),
       Concrete (ConcreteNumber right) ) ->
@@ -331,6 +334,19 @@ and interpret_binop_not_short (state : state) (op : string) (left : any_value)
       Concrete (ConcreteBoolean (equal_concrete_value left right))
   | "~=", Concrete left, Concrete right ->
       Concrete (ConcreteBoolean (not @@ equal_concrete_value left right))
+  | "<", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right)
+  | "<=", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right)
+  | ">", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right)
+  | ">=", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
+      Concrete
+        (ConcreteBoolean
+           ((match op with
+            | "<" -> ( < )
+            | "<=" -> ( <= )
+            | ">" -> ( > )
+            | ">=" -> ( >= )
+            | _ -> failwith "unreachable")
+              (Int32.compare left right) 0))
   | _ ->
       failwith
         (Printf.sprintf "unsupported op: %s %s %s" (show_any_value left) op
@@ -631,12 +647,17 @@ let example_program =
   BatFile.with_file_in "celeste-standard-syntax.lua" (fun f ->
       f |> Batteries.IO.to_input_channel |> Lua_parser.Parse.parse_from_chan)
 
-let map_data =
-  BatFile.with_file_in "map-data.txt" BatIO.read_all
-  |> Str.global_replace (Str.regexp "[^a-f0-9]") ""
-  |> String.to_seq |> List.of_seq |> parse_hex_bytes
+let load_hex_file name size =
+  let data =
+    BatFile.with_file_in name BatIO.read_all
+    |> Str.global_replace (Str.regexp "[^a-f0-9]") ""
+    |> String.to_seq |> List.of_seq |> parse_hex_bytes
+  in
+  assert (List.length data = size);
+  data
 
-let () = assert (List.length map_data = 8192)
+let map_data = load_hex_file "map-data.txt" 8192
+let flag_data = load_hex_file "flag-data.txt" 256
 
 let return_from_builtin (value : any_value) (state : state) : state =
   assert (state.return = None);
@@ -714,6 +735,20 @@ let builtin_mget _ state args =
   let v = List.nth map_data (x + (y * 128)) in
   return_from_builtin (Concrete (ConcreteNumber (pico_number_of_int v))) state
 
+let builtin_fget _ state args =
+  let i, b =
+    match args with
+    | [ Concrete (ConcreteNumber i); Concrete (ConcreteNumber b) ] -> (i, b)
+    | _ -> failwith "bad arguments to rnd"
+  in
+  let i = int_of_pico_number i in
+  let b = int_of_pico_number b in
+  assert (b >= 0 && b < 8);
+  let v = List.nth flag_data i in
+  return_from_builtin
+    (Concrete (ConcreteBoolean (Int.logand v (Int.shift_left 1 b) != 0)))
+    state
+
 let builtin_min _ state args =
   let a, b =
     match args with
@@ -729,6 +764,15 @@ let builtin_max _ state args =
     | _ -> failwith "bad arguments to max"
   in
   return_from_builtin (Concrete (ConcreteNumber (Int32.max a b))) state
+
+let builtin_abs _ state args =
+  let abs_pico (n : pico_number) : pico_number = Int32.abs n in
+  let result =
+    match args with
+    | [ Concrete (ConcreteNumber v) ] -> Concrete (ConcreteNumber (abs_pico v))
+    | _ -> failwith "bad arguments to abs"
+  in
+  return_from_builtin result state
 
 let builtin_dead _ state args = state
 
@@ -750,8 +794,10 @@ let initial_state =
         ("flr", builtin_flr);
         ("foreach", builtin_foreach);
         ("mget", builtin_mget);
+        ("fget", builtin_fget);
         ("min", builtin_min);
         ("max", builtin_max);
+        ("abs", builtin_abs);
         ("music", builtin_dead);
         ("sfx", builtin_dead);
       ]
@@ -769,4 +815,8 @@ let () =
   let state = gc_state state in
   print_heap_short state.heap;
   Printf.printf "heap size before gc: %d\n" old_heap_size;
-  Printf.printf "heap size after gc: %d\n" (List.length state.heap)
+  Printf.printf "heap size after gc: %d\n" (List.length state.heap);
+  let state =
+    "_update()" |> Lua_parser.Parse.parse_from_string |> debug_program state
+  in
+  ignore state
