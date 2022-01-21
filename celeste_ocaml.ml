@@ -56,6 +56,10 @@ type abstract_value =
 type any_value = Concrete of concrete_value | Abstract of abstract_value
 [@@deriving show]
 
+type lhs_value =
+  | ArrayTableElement of int * int
+  | ObjectTableElement of int * string
+
 type array_table = any_value list [@@deriving show]
 type object_table = any_value StringMap.t
 
@@ -164,7 +168,7 @@ let int_of_any_value v =
   | _ -> failwith "i_from is not an integer"
 
 let rec interpret_expression (state : state) (expr : ast) :
-    state * (int * string) option * any_value =
+    state * lhs_value option * any_value =
   match expr with
   | Number n ->
       (state, None, Concrete (ConcreteNumber (pico_number_of_string n)))
@@ -173,7 +177,7 @@ let rec interpret_expression (state : state) (expr : ast) :
   | Bool "nil" -> (state, None, Concrete ConcreteNil)
   | Ident name ->
       let lhs_ref, lhs_name, value = get_by_scope name state in
-      (state, Some (lhs_ref, lhs_name), value)
+      (state, Some (ObjectTableElement (lhs_ref, lhs_name)), value)
   | Table (Elist []) -> allocate UnknownTable state
   | Table (Elist initializer_asts) ->
       let initializers =
@@ -214,6 +218,28 @@ let rec interpret_expression (state : state) (expr : ast) :
       in
       let state, return_value = interpret_call state callee_value arg_values in
       (state, None, Option.get return_value)
+  | Clist [ lhs_expr; Key1 rhs_expr ] ->
+      let state, lhs_ref =
+        match interpret_expression state lhs_expr with
+        | state, _, Concrete (ConcreteReference ref) -> (state, ref)
+        | _ ->
+            failwith "element access where left value is not ConcreteReference"
+      in
+      let state, rhs_index =
+        match interpret_expression state rhs_expr with
+        | state, _, Concrete (ConcreteNumber i) ->
+            (state, int_of_pico_number i - 1)
+        | _ -> failwith "element access where right value is not ConcreteNumber"
+      in
+      let value =
+        match List.nth state.heap lhs_ref with
+        | ArrayTable values -> List.nth values rhs_index
+        | _ ->
+            failwith
+              "element access where left value references something that's not \
+               an ArrayTable"
+      in
+      (state, Some (ArrayTableElement (lhs_ref, rhs_index)), value)
   | Clist [ lhs_expr; Key2 (Ident rhs_name) ] ->
       let state, lhs_ref =
         match interpret_expression state lhs_expr with
@@ -224,32 +250,49 @@ let rec interpret_expression (state : state) (expr : ast) :
       let value =
         match List.nth state.heap lhs_ref with
         | ObjectTable scope -> StringMap.find_opt rhs_name scope
+        | UnknownTable -> None
         | _ ->
             failwith
               "property access where left value references something that's \
                not an ObjectTable"
       in
       let value = Option.value value ~default:(Concrete ConcreteNil) in
-      (state, Some (lhs_ref, rhs_name), value)
+      (state, Some (ObjectTableElement (lhs_ref, rhs_name)), value)
   | Unop (op, value) ->
       let state, value = without_lhs interpret_expression state value in
       (state, None, interpret_unop state op value)
   | Binop (op, left, right) ->
       let state, left = without_lhs interpret_expression state left in
-      let state, right = without_lhs interpret_expression state right in
-      (state, None, interpret_binop state op left right)
+      let state, value = interpret_binop_maybe_short state op left right in
+      (state, None, value)
   | _ ->
       Lua_parser.Pp_ast.pp_ast_show expr;
       failwith "unsupported expression"
 
 (* TODO WARNING some of these unop handlers probably have mistakes*)
 and interpret_unop (state : state) (op : string) (v : any_value) : any_value =
-  match (op, v) with
-  | "+", Concrete (ConcreteNumber v) -> Concrete (ConcreteNumber (Int32.neg v))
+  match (String.trim op, v) with
+  | "-", Concrete (ConcreteNumber v) -> Concrete (ConcreteNumber (Int32.neg v))
+  | "not", Concrete (ConcreteBoolean b) -> Concrete (ConcreteBoolean (not b))
   | _ -> failwith (Printf.sprintf "unsupported op: %s %s" op (show_any_value v))
 
+and interpret_binop_maybe_short (state : state) (op : string) (left : any_value)
+    (right : ast) : state * any_value =
+  match (op, left) with
+  | "and", Concrete (ConcreteBoolean true) ->
+      without_lhs interpret_expression state right
+  | "and", Concrete (ConcreteBoolean false) ->
+      (state, Concrete (ConcreteBoolean false))
+  | "or", Concrete (ConcreteBoolean true) ->
+      (state, Concrete (ConcreteBoolean true))
+  | "or", Concrete (ConcreteBoolean false) ->
+      without_lhs interpret_expression state right
+  | _ ->
+      let state, right = without_lhs interpret_expression state right in
+      (state, interpret_binop_not_short state op left right)
+
 (* TODO WARNING some of these binop handlers probably have mistakes*)
-and interpret_binop (state : state) (op : string) (left : any_value)
+and interpret_binop_not_short (state : state) (op : string) (left : any_value)
     (right : any_value) : any_value =
   match (op, left, right) with
   | "+", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
@@ -259,6 +302,8 @@ and interpret_binop (state : state) (op : string) (left : any_value)
       Abstract (AbstractNumberRange (right_min, right_max)) ) ->
       Abstract
         (AbstractNumberRange (Int32.add left right_min, Int32.add left right_max))
+  | "-", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
+      Concrete (ConcreteNumber (Int32.sub left right))
   | ( "/",
       Abstract (AbstractNumberRange (left_min, left_max)),
       Concrete (ConcreteNumber right) ) ->
@@ -266,6 +311,12 @@ and interpret_binop (state : state) (op : string) (left : any_value)
         (AbstractNumberRange (Int32.div left_min right, Int32.add left_max right))
   | "*", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
       Concrete (ConcreteNumber (Int32.mul left right))
+  | "%", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
+      let left = int_of_pico_number left in
+      assert (left >= 0);
+      let right = int_of_pico_number right in
+      assert (right > 0);
+      Concrete (ConcreteNumber (pico_number_of_int (left mod right)))
   | "==", Concrete left, Concrete right ->
       Concrete (ConcreteBoolean (equal_concrete_value left right))
   | "~=", Concrete left, Concrete right ->
@@ -281,17 +332,33 @@ and interpret_statement (state : state) (stmt : ast) : state =
   assert (state.return == None);
   match stmt with
   | Assign (Elist [ lhs_expr ], Elist [ expr ]) ->
-      let state, (lhs_ref, lhs_name) =
+      let state, lhs =
         match interpret_expression state lhs_expr with
         | state, Some lhs, _ -> (state, lhs)
         | _, None, _ -> failwith "assignment to non-lhs expression"
       in
       let state, value = without_lhs interpret_expression state expr in
-      let update_table = function
-        | ObjectTable o -> ObjectTable (StringMap.add lhs_name value o)
+      let update_array_table lhs_index = function
+        | ArrayTable values ->
+            ArrayTable (map_ith lhs_index (fun _ -> value) values)
         | _ ->
             failwith
-              "lhs of assignment references something that's not an ObjectTable"
+              "lhs of assignment references something that's not an ArrayTable"
+      in
+      let update_object_table lhs_name = function
+        | ObjectTable o -> ObjectTable (StringMap.add lhs_name value o)
+        | UnknownTable -> ObjectTable (StringMap.singleton lhs_name value)
+        | _ ->
+            failwith
+              "lhs of assignment references something that's not an \
+               ObjectTable or UnknownTable"
+      in
+      let lhs_ref, update_table =
+        match lhs with
+        | ArrayTableElement (lhs_ref, lhs_index) ->
+            (lhs_ref, update_array_table lhs_index)
+        | ObjectTableElement (lhs_ref, lhs_name) ->
+            (lhs_ref, update_object_table lhs_name)
       in
       { state with heap = map_ith lhs_ref update_table state.heap }
   | Lassign (Elist [ Ident name ], expr) ->
@@ -543,6 +610,22 @@ let builtin_mget state args =
   let v = List.nth map_data (x + (y * 128)) in
   return_from_builtin (Concrete (ConcreteNumber (pico_number_of_int v))) state
 
+let builtin_min state args =
+  let a, b =
+    match args with
+    | [ Concrete (ConcreteNumber a); Concrete (ConcreteNumber b) ] -> (a, b)
+    | _ -> failwith "bad arguments to min"
+  in
+  return_from_builtin (Concrete (ConcreteNumber (Int32.min a b))) state
+
+let builtin_max state args =
+  let a, b =
+    match args with
+    | [ Concrete (ConcreteNumber a); Concrete (ConcreteNumber b) ] -> (a, b)
+    | _ -> failwith "bad arguments to max"
+  in
+  return_from_builtin (Concrete (ConcreteNumber (Int32.max a b))) state
+
 let builtin_dead state args = state
 
 let initial_state =
@@ -563,7 +646,10 @@ let initial_state =
         ("flr", builtin_flr);
         ("foreach", builtin_foreach);
         ("mget", builtin_mget);
+        ("min", builtin_min);
+        ("max", builtin_max);
         ("music", builtin_dead);
+        ("sfx", builtin_dead);
       ]
   in
   state
