@@ -41,6 +41,16 @@ let int_of_pico_number (n : pico_number) : int =
 
 let equal_pico_number = Int32.equal
 
+let pico_number_mul (a : pico_number) (b : pico_number) =
+  let result_high = Int64.mul (Int64.of_int32 a) (Int64.of_int32 b) in
+  let result_low = Int64.shift_right result_high 16 in
+  Int64.to_int32 result_low
+
+let pico_number_div (a : pico_number) (b : pico_number) =
+  let a_high = Int64.shift_left (Int64.of_int32 a) 16 in
+  let result = Int64.div a_high (Int64.of_int32 b) in
+  Int64.to_int32 result
+
 type concrete_value =
   | ConcreteNumber of pico_number
   | ConcreteBoolean of bool
@@ -311,6 +321,8 @@ and interpret_binop_not_short (state : state) (op : string) (left : any_value)
     (right : any_value) : any_value =
   match (op, left, right) with
   | "+", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
+      Printf.printf "left %s, right %s\n" (show_pico_number left)
+        (show_pico_number right);
       Concrete (ConcreteNumber (Int32.add left right))
   | ( "+",
       Concrete (ConcreteNumber left),
@@ -320,14 +332,16 @@ and interpret_binop_not_short (state : state) (op : string) (left : any_value)
   | "-", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
       Concrete (ConcreteNumber (Int32.sub left right))
   | "/", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
-      Concrete (ConcreteNumber (Int32.div left right))
+      Concrete (ConcreteNumber (pico_number_div left right))
   | ( "/",
       Abstract (AbstractNumberRange (left_min, left_max)),
       Concrete (ConcreteNumber right) ) ->
+      assert (Int32.compare right (pico_number_of_int 0) > 0);
       Abstract
-        (AbstractNumberRange (Int32.div left_min right, Int32.add left_max right))
+        (AbstractNumberRange
+           (pico_number_div left_min right, pico_number_div left_max right))
   | "*", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
-      Concrete (ConcreteNumber (Int32.mul left right))
+      Concrete (ConcreteNumber (pico_number_mul left right))
   | "%", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
       let left = int_of_pico_number left in
       assert (left >= 0);
