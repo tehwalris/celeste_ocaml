@@ -745,7 +745,7 @@ let builtin_mget _ state args =
   let x = int_of_pico_number x in
   assert (x >= 0 && x < 128);
   let y = int_of_pico_number y in
-  assert (y >= 0 && y < 32);
+  assert (y >= 0 && y < 64);
   let v = Array.get map_data (x + (y * 128)) in
   return_from_builtin (Concrete (ConcreteNumber (pico_number_of_int v))) state
 
