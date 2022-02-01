@@ -110,6 +110,7 @@ and state = {
   heap : heap_value list;
   scopes : scope list;
   return : any_value option option;
+  break : bool;
 }
 [@@deriving show]
 
@@ -155,6 +156,9 @@ let add_local (name : string) ((ref, names) : scope) : scope =
   (ref, StringSet.add name names)
 
 let is_in_call (state : state) : bool = List.length state.scopes != 0
+
+let is_skipping (state : state) : bool =
+  Option.is_some state.return || state.break
 
 let pad_or_drop p n l =
   if List.length l > n then BatList.take n l
@@ -354,10 +358,10 @@ and interpret_binop_not_short (state : state) (op : string) (left : any_value)
 
 and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
     : state =
-  ctx.on_statement stmt;
-  assert (state.return = None);
-  match stmt with
-  | Assign (Elist [ lhs_expr ], Elist [ expr ]) ->
+  if not (is_skipping state) then ctx.on_statement stmt;
+  match (is_skipping state, stmt) with
+  | true, _ -> state
+  | _, Assign (Elist [ lhs_expr ], Elist [ expr ]) ->
       let state, lhs =
         match interpret_expression ctx state lhs_expr with
         | state, Some lhs, _ -> (state, lhs)
@@ -387,7 +391,7 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
             (lhs_ref, update_object_table lhs_name)
       in
       { state with heap = map_ith lhs_ref update_table state.heap }
-  | Lassign (Elist [ Ident name ], expr) ->
+  | _, Lassign (Elist [ Ident name ], expr) ->
       let state =
         interpret_statement ctx state (Lnames (Elist [ Ident name ]))
       in
@@ -395,15 +399,15 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
         interpret_statement ctx state (Assign (Elist [ Ident name ], expr))
       in
       state
-  | Lnames (Elist [ Ident name ]) ->
+  | _, Lnames (Elist [ Ident name ]) ->
       {
         state with
         scopes = add_local name (List.hd state.scopes) :: List.tl state.scopes;
       }
-  | Function (FNlist [ Ident name ], f) ->
+  | _, Function (FNlist [ Ident name ], f) ->
       interpret_statement ctx state
         (Assign (Elist [ Ident name ], Elist [ FunctionE f ]))
-  | Clist [ callee_expr; Args (Elist arg_exprs) ] ->
+  | _, Clist [ callee_expr; Args (Elist arg_exprs) ] ->
       let state, callee_value =
         interpret_rhs_expression ctx state callee_expr
       in
@@ -412,14 +416,15 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
       in
       let state, _ = interpret_call ctx state callee_value arg_values in
       state
-  | Return (Elist [ expr ]) ->
+  | _, Return (Elist [ expr ]) ->
       assert (is_in_call state);
       let state, value = interpret_rhs_expression ctx state expr in
       { state with return = Some (Some value) }
-  | Return (Elist []) ->
+  | _, Return (Elist []) ->
       assert (is_in_call state);
       { state with return = Some None }
-  | For1 (Ident i_name, i_from, i_to, Slist body) ->
+  | _, Break -> { state with break = true }
+  | _, For1 (Ident i_name, i_from, i_to, Slist body) ->
       let state, i_from = interpret_rhs_expression ctx state i_from in
       let i_from = int_of_any_value i_from in
       let state, i_to = interpret_rhs_expression ctx state i_to in
@@ -445,14 +450,14 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
             }
           in
           let state = List.fold_left (interpret_statement ctx) state body in
-          { state with scopes = old_scopes })
+          { state with scopes = old_scopes; break = false })
         state i_values
-  | If1 (cond, body) ->
+  | _, If1 (cond, body) ->
       interpret_statement ctx state (If2 (cond, body, Slist []))
-  | If2 (cond, then_body, else_body) ->
+  | _, If2 (cond, then_body, else_body) ->
       interpret_statement ctx state
         (If3 (cond, then_body, Slist [ Elseif (Bool "true", else_body) ]))
-  | If3 (first_cond, first_body, Slist elseifs) ->
+  | _, If3 (first_cond, first_body, Slist elseifs) ->
       let branches =
         List.map
           (function
@@ -483,19 +488,19 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
       in
       let state = List.fold_left (interpret_statement ctx) state body in
       { state with scopes = old_scopes }
-  | If4 (first_cond, first_body, Slist elseifs, else_body) ->
+  | _, If4 (first_cond, first_body, Slist elseifs, else_body) ->
       interpret_statement ctx state
         (If3
            ( first_cond,
              first_body,
              Slist (elseifs @ [ Elseif (Bool "true", else_body) ]) ))
-  | _ ->
+  | _, _ ->
       Lua_parser.Pp_ast.pp_ast_show stmt;
       failwith "unsupported statement"
 
 and interpret_call (ctx : interpreter_context) (state : state)
     (callee : any_value) (args : any_value list) : state * any_value option =
-  assert (state.return = None);
+  assert (not (is_skipping state));
   let ref =
     match callee with
     | Concrete (ConcreteReference ref) -> ref
@@ -503,11 +508,6 @@ and interpret_call (ctx : interpreter_context) (state : state)
   in
   let old_scopes = state.scopes in
   let state, scope_ref = allocate_raw (ObjectTable StringMap.empty) state in
-  let interpret_unless_returned state stmt =
-    match state.return with
-    | Some _ -> state
-    | None -> interpret_statement ctx state stmt
-  in
   let state =
     match List.nth state.heap ref with
     | Function (params, body, scopes) ->
@@ -525,7 +525,7 @@ and interpret_call (ctx : interpreter_context) (state : state)
             (fun state name value -> set_by_scope name value state)
             state params args
         in
-        let state = List.fold_left interpret_unless_returned state body in
+        let state = List.fold_left (interpret_statement ctx) state body in
         state
     | Builtin f -> f ctx state args
     | _ -> failwith "callee is not a function"
@@ -535,7 +535,7 @@ and interpret_call (ctx : interpreter_context) (state : state)
 
 let rec gc_state state : state =
   assert (List.length state.scopes = 0);
-  assert (state.return = None);
+  assert (not (is_skipping state));
   let new_refs_by_old_ref = Array.make (List.length state.heap) None in
   let heap_array = Array.of_list state.heap in
   let old_refs = Stack.create () in
@@ -660,7 +660,7 @@ let map_data = load_hex_file "map-data.txt" 8192
 let flag_data = load_hex_file "flag-data.txt" 256
 
 let return_from_builtin (value : any_value) (state : state) : state =
-  assert (state.return = None);
+  assert (not (is_skipping state));
   { state with return = Some (Some value) }
 
 let builtin_print _ state args =
@@ -778,7 +778,12 @@ let builtin_dead _ state args = state
 
 let initial_state =
   let state =
-    { heap = [ ObjectTable StringMap.empty ]; scopes = []; return = None }
+    {
+      heap = [ ObjectTable StringMap.empty ];
+      scopes = [];
+      return = None;
+      break = false;
+    }
   in
   let state =
     List.fold_left
