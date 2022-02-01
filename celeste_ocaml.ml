@@ -708,7 +708,7 @@ let builtin_foreach ctx state args =
   let table_ref, cb =
     match args with
     | [ Concrete (ConcreteReference target_ref); cb ] -> (target_ref, cb)
-    | _ -> failwith "bad arguments to add"
+    | _ -> failwith "bad arguments to foreach"
   in
   let values =
     match List.nth state.heap table_ref with
@@ -774,6 +774,22 @@ let builtin_abs _ state args =
   in
   return_from_builtin result state
 
+let builtin_count ctx state args =
+  let table_ref =
+    match args with
+    | [ Concrete (ConcreteReference target_ref) ] -> target_ref
+    | _ -> failwith "bad arguments to count"
+  in
+  let values =
+    match List.nth state.heap table_ref with
+    | ArrayTable values -> values
+    | UnknownTable -> []
+    | _ -> failwith "expected ArrayTable or UnknownTable"
+  in
+  return_from_builtin
+    (Concrete (ConcreteNumber (pico_number_of_int @@ List.length values)))
+    state
+
 let builtin_dead _ state args = state
 
 let initial_state =
@@ -803,6 +819,7 @@ let initial_state =
         ("min", builtin_min);
         ("max", builtin_max);
         ("abs", builtin_abs);
+        ("count", builtin_count);
         ("music", builtin_dead);
         ("sfx", builtin_dead);
       ]
