@@ -182,10 +182,31 @@ let int_of_any_value v =
 let concat_fold_left f init list =
   List.fold_left (fun xs y -> List.concat_map (fun x -> f x y) xs) init list
 
+let concat_fold_left_map (f : 'a -> 'b -> ('a * 'c) list) (init : 'a list)
+    (list : 'b list) : ('a * 'c list) list =
+  list
+  |> List.fold_left
+       (fun (xs : ('a * 'c list) list) (y : 'b) ->
+         xs
+         |> List.concat_map (fun (old_acc, old_map_values) ->
+                f old_acc y
+                |> List.map (fun (acc, map_value) ->
+                       (acc, map_value :: old_map_values))))
+       (List.map (fun init -> (init, [])) init)
+  |> List.map (fun (acc, map_values) -> (acc, List.rev map_values))
+
 let only xs =
   match xs with
   | [ x ] -> x
   | _ -> failwith "list does not contain exactly one element"
+
+let rec bools_from_any_value (v : any_value) : bool list =
+  match v with
+  | Concrete (ConcreteBoolean b) -> [ b ]
+  | Abstract (AbstractOneOf options) ->
+      List.concat_map (fun o -> bools_from_any_value (Concrete o)) options
+  | _ ->
+      failwith "bools_from_any_value called on value which may not be a boolean"
 
 let rec interpret_expression (ctx : interpreter_context) (state : state)
     (expr : ast) : (state * lhs_value option * any_value) list =
@@ -213,7 +234,8 @@ let rec interpret_expression (ctx : interpreter_context) (state : state)
       in
       let state, initializer_values =
         List.fold_left_map
-          (fun state (_, expr) -> interpret_rhs_expression ctx state expr)
+          (fun state (_, expr) ->
+            only @@ interpret_rhs_expression ctx state expr)
           state initializers
       in
       let value_map =
@@ -237,15 +259,16 @@ let rec interpret_expression (ctx : interpreter_context) (state : state)
       [ (state, None, value) ]
   | Clist [ callee_expr; Args (Elist arg_exprs) ] ->
       let state, callee_value =
-        interpret_rhs_expression ctx state callee_expr
+        only @@ interpret_rhs_expression ctx state callee_expr
       in
       let state, arg_values =
-        List.fold_left_map (interpret_rhs_expression ctx) state arg_exprs
+        List.fold_left_map
+          (fun state expr -> only @@ interpret_rhs_expression ctx state expr)
+          state arg_exprs
       in
-      let state, return_value =
-        interpret_call ctx state callee_value arg_values
-      in
-      [ (state, None, Option.get return_value) ]
+      interpret_call ctx state callee_value arg_values
+      |> List.map (fun (state, return_value) ->
+             (state, None, Option.get return_value))
   | Clist [ lhs_expr; Key1 rhs_expr ] ->
       let state, lhs_ref =
         match interpret_expression ctx state lhs_expr with
@@ -287,21 +310,20 @@ let rec interpret_expression (ctx : interpreter_context) (state : state)
       let value = Option.value value ~default:(Concrete ConcreteNil) in
       [ (state, Some (ObjectTableElement (lhs_ref, rhs_name)), value) ]
   | Unop (op, value) ->
-      let state, value = interpret_rhs_expression ctx state value in
+      let state, value = only @@ interpret_rhs_expression ctx state value in
       [ (state, None, interpret_unop state op value) ]
   | Binop (op, left, right) ->
-      let state, left = interpret_rhs_expression ctx state left in
-      let state, value = interpret_binop_maybe_short ctx state op left right in
-      [ (state, None, value) ]
+      let state, left = only @@ interpret_rhs_expression ctx state left in
+      interpret_binop_maybe_short ctx state op left right
+      |> List.map (fun (state, value) -> (state, None, value))
   | Pexp expr -> interpret_expression ctx state expr
   | _ ->
       Lua_parser.Pp_ast.pp_ast_show expr;
       failwith "unsupported expression"
 
 and interpret_rhs_expression ctx state expr =
-  match interpret_expression ctx state expr with
-  | [ (state, _, value) ] -> (state, value)
-  | _ -> failwith "TODO interpret_rhs_expression for multiple results"
+  interpret_expression ctx state expr
+  |> List.map (fun (state, _, value) -> (state, value))
 
 (* TODO WARNING some of these unop handlers probably have mistakes*)
 and interpret_unop (state : state) (op : string) (v : any_value) : any_value =
@@ -311,19 +333,24 @@ and interpret_unop (state : state) (op : string) (v : any_value) : any_value =
   | _ -> failwith (Printf.sprintf "unsupported op: %s %s" op (show_any_value v))
 
 and interpret_binop_maybe_short (ctx : interpreter_context) (state : state)
-    (op : string) (left : any_value) (right : ast) : state * any_value =
+    (op : string) (left : any_value) (right : ast) : (state * any_value) list =
   match (op, left) with
+  | op, Abstract (AbstractOneOf left_options) ->
+      left_options
+      |> List.map (fun v -> Concrete v)
+      |> List.concat_map (fun left ->
+             interpret_binop_maybe_short ctx state op left right)
   | "and", Concrete (ConcreteBoolean true) ->
       interpret_rhs_expression ctx state right
   | "and", Concrete (ConcreteBoolean false) ->
-      (state, Concrete (ConcreteBoolean false))
+      [ (state, Concrete (ConcreteBoolean false)) ]
   | "or", Concrete (ConcreteBoolean true) ->
-      (state, Concrete (ConcreteBoolean true))
+      [ (state, Concrete (ConcreteBoolean true)) ]
   | "or", Concrete (ConcreteBoolean false) ->
       interpret_rhs_expression ctx state right
   | _ ->
-      let state, right = interpret_rhs_expression ctx state right in
-      (state, interpret_binop_not_short state op left right)
+      let state, right = only @@ interpret_rhs_expression ctx state right in
+      [ (state, interpret_binop_not_short state op left right) ]
 
 (* TODO WARNING some of these binop handlers probably have mistakes*)
 and interpret_binop_not_short (state : state) (op : string) (left : any_value)
@@ -390,7 +417,7 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
         | state, Some lhs, _ -> (state, lhs)
         | _, None, _ -> failwith "assignment to non-lhs expression"
       in
-      let state, value = interpret_rhs_expression ctx state expr in
+      let state, value = only @@ interpret_rhs_expression ctx state expr in
       let update_array_table lhs_index = function
         | ArrayTable values ->
             ArrayTable (map_ith lhs_index (fun _ -> value) values)
@@ -434,25 +461,27 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
         (Assign (Elist [ Ident name ], Elist [ FunctionE f ]))
   | _, Clist [ callee_expr; Args (Elist arg_exprs) ] ->
       let state, callee_value =
-        interpret_rhs_expression ctx state callee_expr
+        only @@ interpret_rhs_expression ctx state callee_expr
       in
       let state, arg_values =
-        List.fold_left_map (interpret_rhs_expression ctx) state arg_exprs
+        List.fold_left_map
+          (fun state expr -> only @@ interpret_rhs_expression ctx state expr)
+          state arg_exprs
       in
-      let state, _ = interpret_call ctx state callee_value arg_values in
-      [ state ]
+      interpret_call ctx state callee_value arg_values
+      |> List.map (fun (state, _) -> state)
   | _, Return (Elist [ expr ]) ->
       assert (is_in_call state);
-      let state, value = interpret_rhs_expression ctx state expr in
+      let state, value = only @@ interpret_rhs_expression ctx state expr in
       [ { state with return = Some (Some value) } ]
   | _, Return (Elist []) ->
       assert (is_in_call state);
       [ { state with return = Some None } ]
   | _, Break -> [ { state with break = true } ]
   | _, For1 (Ident i_name, i_from, i_to, Slist body) ->
-      let state, i_from = interpret_rhs_expression ctx state i_from in
+      let state, i_from = only @@ interpret_rhs_expression ctx state i_from in
       let i_from = int_of_any_value i_from in
-      let state, i_to = interpret_rhs_expression ctx state i_to in
+      let state, i_to = only @@ interpret_rhs_expression ctx state i_to in
       let i_to = int_of_any_value i_to in
       assert (i_from <= i_to);
       let i_values =
@@ -497,33 +526,34 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
             | _ -> failwith "expected Elseif")
           (Elseif (first_cond, first_body) :: elseifs)
       in
-      let interpret_condition state (cond, _) : state * (state * bool) =
-        let sate, value = interpret_rhs_expression ctx state cond in
-        let value =
-          match value with
-          | Concrete (ConcreteBoolean b) -> b
-          | _ -> failwith "if branch condition is not a ConcreteBoolean"
-        in
-        (state, (state, value))
+      let interpret_condition state (cond, _) : (state * (state * bool)) list =
+        interpret_rhs_expression ctx state cond
+        |> List.concat_map (fun (state, value) ->
+               bools_from_any_value value
+               |> List.map (fun value -> (state, (state, value))))
       in
-      let _, matches = List.fold_left_map interpret_condition state branches in
-      let state, _, body =
-        List.map2
-          (fun (state, did_match) (_, body) -> (state, did_match, body))
-          matches branches
-        |> List.find (fun (_, did_match, _) -> did_match)
-      in
-      let old_scopes = state.scopes in
-      let state, scope_ref = allocate_raw (ObjectTable StringMap.empty) state in
-      let state =
-        { state with scopes = (scope_ref, StringSet.empty) :: state.scopes }
-      in
-      let state =
-        List.fold_left
-          (fun state ast -> only @@ interpret_statement ctx state ast)
-          state body
-      in
-      [ { state with scopes = old_scopes } ]
+      concat_fold_left_map interpret_condition [ state ] branches
+      |> List.concat_map (fun (_, matches) ->
+             let state, _, body =
+               List.map2
+                 (fun (state, did_match) (_, body) -> (state, did_match, body))
+                 matches branches
+               |> List.find (fun (_, did_match, _) -> did_match)
+             in
+             let old_scopes = state.scopes in
+             let state, scope_ref =
+               allocate_raw (ObjectTable StringMap.empty) state
+             in
+             let state =
+               {
+                 state with
+                 scopes = (scope_ref, StringSet.empty) :: state.scopes;
+               }
+             in
+             concat_fold_left
+               (fun state ast -> interpret_statement ctx state ast)
+               [ state ] body
+             |> List.map (fun state -> { state with scopes = old_scopes }))
   | _, If4 (first_cond, first_body, Slist elseifs, else_body) ->
       interpret_statement ctx state
         (If3
@@ -535,7 +565,8 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
       failwith "unsupported statement"
 
 and interpret_call (ctx : interpreter_context) (state : state)
-    (callee : any_value) (args : any_value list) : state * any_value option =
+    (callee : any_value) (args : any_value list) :
+    (state * any_value option) list =
   assert (not (is_skipping state));
   let ref =
     match callee with
@@ -544,7 +575,7 @@ and interpret_call (ctx : interpreter_context) (state : state)
   in
   let old_scopes = state.scopes in
   let state, scope_ref = allocate_raw (ObjectTable StringMap.empty) state in
-  let state =
+  let states =
     match List.nth state.heap ref with
     | Function (params, body, scopes) ->
         let args =
@@ -561,17 +592,17 @@ and interpret_call (ctx : interpreter_context) (state : state)
             (fun state name value -> set_by_scope name value state)
             state params args
         in
-        let state =
-          List.fold_left
-            (fun state ast -> only @@ interpret_statement ctx state ast)
-            state body
-        in
-        state
-    | Builtin f -> f ctx state args
+        concat_fold_left
+          (fun state ast -> interpret_statement ctx state ast)
+          [ state ] body
+    | Builtin f -> [ f ctx state args ]
     | _ -> failwith "callee is not a function"
   in
-  ( { state with scopes = old_scopes; return = None },
-    Option.value state.return ~default:None )
+  List.map
+    (fun state ->
+      ( { state with scopes = old_scopes; return = None },
+        Option.value state.return ~default:None ))
+    states
 
 let rec gc_state state : state =
   assert (List.length state.scopes = 0);
@@ -757,10 +788,9 @@ let builtin_foreach ctx state args =
     | _ -> failwith "expected ArrayTable or UnknownTable"
   in
   let call_iteration state value =
-    let state, _ = interpret_call ctx state cb [ value ] in
-    state
+    interpret_call ctx state cb [ value ] |> List.map (fun (state, _) -> state)
   in
-  List.fold_left call_iteration state values
+  only @@ concat_fold_left call_iteration [ state ] values
 
 let builtin_mget _ state args =
   let x, y =
@@ -891,8 +921,7 @@ let () =
   print_heap_short state.heap;
   Printf.printf "heap size before gc: %d\n" old_heap_size;
   Printf.printf "heap size after gc: %d\n" (List.length state.heap);
-  let state =
+  let states =
     "_update()" |> Lua_parser.Parse.parse_from_string |> debug_program state
-    |> only
   in
-  ignore state
+  Printf.printf "possible executions: %d\n" (List.length states)
