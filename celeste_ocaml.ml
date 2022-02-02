@@ -179,20 +179,28 @@ let int_of_any_value v =
   | Concrete (ConcreteNumber n) -> int_of_pico_number n
   | _ -> failwith "i_from is not an integer"
 
+let concat_fold_left f init list =
+  List.fold_left (fun xs y -> List.concat_map (fun x -> f x y) xs) init list
+
+let only xs =
+  match xs with
+  | [ x ] -> x
+  | _ -> failwith "list does not contain exactly one element"
+
 let rec interpret_expression (ctx : interpreter_context) (state : state)
-    (expr : ast) : state * lhs_value option * any_value =
+    (expr : ast) : (state * lhs_value option * any_value) list =
   match expr with
   | Number n ->
-      (state, None, Concrete (ConcreteNumber (pico_number_of_string n)))
-  | Bool "true" -> (state, None, Concrete (ConcreteBoolean true))
-  | Bool "false" -> (state, None, Concrete (ConcreteBoolean false))
-  | Bool "nil" -> (state, None, Concrete ConcreteNil)
+      [ (state, None, Concrete (ConcreteNumber (pico_number_of_string n))) ]
+  | Bool "true" -> [ (state, None, Concrete (ConcreteBoolean true)) ]
+  | Bool "false" -> [ (state, None, Concrete (ConcreteBoolean false)) ]
+  | Bool "nil" -> [ (state, None, Concrete ConcreteNil) ]
   | Ident name ->
       let lhs_ref, lhs_name, value = get_by_scope name state in
-      (state, Some (ObjectTableElement (lhs_ref, lhs_name)), value)
+      [ (state, Some (ObjectTableElement (lhs_ref, lhs_name)), value) ]
   | Table (Elist []) ->
       let state, value = allocate UnknownTable state in
-      (state, None, value)
+      [ (state, None, value) ]
   | Table (Elist initializer_asts) ->
       let initializers =
         List.map
@@ -215,7 +223,7 @@ let rec interpret_expression (ctx : interpreter_context) (state : state)
         |> List.to_seq |> StringMap.of_seq
       in
       let state, value = allocate (ObjectTable value_map) state in
-      (state, None, value)
+      [ (state, None, value) ]
   | FunctionE (Fbody (Elist params, Slist body)) ->
       let params =
         List.map
@@ -226,7 +234,7 @@ let rec interpret_expression (ctx : interpreter_context) (state : state)
       let state, value =
         allocate (Function (params, body, state.scopes)) state
       in
-      (state, None, value)
+      [ (state, None, value) ]
   | Clist [ callee_expr; Args (Elist arg_exprs) ] ->
       let state, callee_value =
         interpret_rhs_expression ctx state callee_expr
@@ -237,17 +245,17 @@ let rec interpret_expression (ctx : interpreter_context) (state : state)
       let state, return_value =
         interpret_call ctx state callee_value arg_values
       in
-      (state, None, Option.get return_value)
+      [ (state, None, Option.get return_value) ]
   | Clist [ lhs_expr; Key1 rhs_expr ] ->
       let state, lhs_ref =
         match interpret_expression ctx state lhs_expr with
-        | state, _, Concrete (ConcreteReference ref) -> (state, ref)
+        | [ (state, _, Concrete (ConcreteReference ref)) ] -> (state, ref)
         | _ ->
             failwith "element access where left value is not ConcreteReference"
       in
       let state, rhs_index =
         match interpret_expression ctx state rhs_expr with
-        | state, _, Concrete (ConcreteNumber i) ->
+        | [ (state, _, Concrete (ConcreteNumber i)) ] ->
             (state, int_of_pico_number i - 1)
         | _ -> failwith "element access where right value is not ConcreteNumber"
       in
@@ -259,11 +267,11 @@ let rec interpret_expression (ctx : interpreter_context) (state : state)
               "element access where left value references something that's not \
                an ArrayTable"
       in
-      (state, Some (ArrayTableElement (lhs_ref, rhs_index)), value)
+      [ (state, Some (ArrayTableElement (lhs_ref, rhs_index)), value) ]
   | Clist [ lhs_expr; Key2 (Ident rhs_name) ] ->
       let state, lhs_ref =
         match interpret_expression ctx state lhs_expr with
-        | state, _, Concrete (ConcreteReference ref) -> (state, ref)
+        | [ (state, _, Concrete (ConcreteReference ref)) ] -> (state, ref)
         | _ ->
             failwith "property access where left value is not ConcreteReference"
       in
@@ -277,22 +285,23 @@ let rec interpret_expression (ctx : interpreter_context) (state : state)
                not an ObjectTable"
       in
       let value = Option.value value ~default:(Concrete ConcreteNil) in
-      (state, Some (ObjectTableElement (lhs_ref, rhs_name)), value)
+      [ (state, Some (ObjectTableElement (lhs_ref, rhs_name)), value) ]
   | Unop (op, value) ->
       let state, value = interpret_rhs_expression ctx state value in
-      (state, None, interpret_unop state op value)
+      [ (state, None, interpret_unop state op value) ]
   | Binop (op, left, right) ->
       let state, left = interpret_rhs_expression ctx state left in
       let state, value = interpret_binop_maybe_short ctx state op left right in
-      (state, None, value)
+      [ (state, None, value) ]
   | Pexp expr -> interpret_expression ctx state expr
   | _ ->
       Lua_parser.Pp_ast.pp_ast_show expr;
       failwith "unsupported expression"
 
 and interpret_rhs_expression ctx state expr =
-  let state, _, value = interpret_expression ctx state expr in
-  (state, value)
+  match interpret_expression ctx state expr with
+  | [ (state, _, value) ] -> (state, value)
+  | _ -> failwith "TODO interpret_rhs_expression for multiple results"
 
 (* TODO WARNING some of these unop handlers probably have mistakes*)
 and interpret_unop (state : state) (op : string) (v : any_value) : any_value =
@@ -371,13 +380,13 @@ and interpret_binop_not_short (state : state) (op : string) (left : any_value)
            (show_any_value right))
 
 and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
-    : state =
+    : state list =
   if not (is_skipping state) then ctx.on_statement stmt;
   match (is_skipping state, stmt) with
-  | true, _ -> state
+  | true, _ -> [ state ]
   | _, Assign (Elist [ lhs_expr ], Elist [ expr ]) ->
       let state, lhs =
-        match interpret_expression ctx state lhs_expr with
+        match only @@ interpret_expression ctx state lhs_expr with
         | state, Some lhs, _ -> (state, lhs)
         | _, None, _ -> failwith "assignment to non-lhs expression"
       in
@@ -404,20 +413,22 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
         | ObjectTableElement (lhs_ref, lhs_name) ->
             (lhs_ref, update_object_table lhs_name)
       in
-      { state with heap = map_ith lhs_ref update_table state.heap }
+      [ { state with heap = map_ith lhs_ref update_table state.heap } ]
   | _, Lassign (Elist [ Ident name ], expr) ->
       let state =
-        interpret_statement ctx state (Lnames (Elist [ Ident name ]))
+        only @@ interpret_statement ctx state (Lnames (Elist [ Ident name ]))
       in
       let state =
         interpret_statement ctx state (Assign (Elist [ Ident name ], expr))
       in
       state
   | _, Lnames (Elist [ Ident name ]) ->
-      {
-        state with
-        scopes = add_local name (List.hd state.scopes) :: List.tl state.scopes;
-      }
+      [
+        {
+          state with
+          scopes = add_local name (List.hd state.scopes) :: List.tl state.scopes;
+        };
+      ]
   | _, Function (FNlist [ Ident name ], f) ->
       interpret_statement ctx state
         (Assign (Elist [ Ident name ], Elist [ FunctionE f ]))
@@ -429,15 +440,15 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
         List.fold_left_map (interpret_rhs_expression ctx) state arg_exprs
       in
       let state, _ = interpret_call ctx state callee_value arg_values in
-      state
+      [ state ]
   | _, Return (Elist [ expr ]) ->
       assert (is_in_call state);
       let state, value = interpret_rhs_expression ctx state expr in
-      { state with return = Some (Some value) }
+      [ { state with return = Some (Some value) } ]
   | _, Return (Elist []) ->
       assert (is_in_call state);
-      { state with return = Some None }
-  | _, Break -> { state with break = true }
+      [ { state with return = Some None } ]
+  | _, Break -> [ { state with break = true } ]
   | _, For1 (Ident i_name, i_from, i_to, Slist body) ->
       let state, i_from = interpret_rhs_expression ctx state i_from in
       let i_from = int_of_any_value i_from in
@@ -449,23 +460,30 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
           (i_to - i_from + 1)
           (fun i -> Concrete (ConcreteNumber (pico_number_of_int (i_from + i))))
       in
-      List.fold_left
-        (fun state i_value ->
-          let old_scopes = state.scopes in
-          let state, scope_ref =
-            allocate_raw
-              (ObjectTable (StringMap.singleton i_name i_value))
-              state
-          in
-          let state =
-            {
-              state with
-              scopes = (scope_ref, StringSet.singleton i_name) :: state.scopes;
-            }
-          in
-          let state = List.fold_left (interpret_statement ctx) state body in
-          { state with scopes = old_scopes; break = false })
-        state i_values
+      let state =
+        List.fold_left
+          (fun state i_value ->
+            let old_scopes = state.scopes in
+            let state, scope_ref =
+              allocate_raw
+                (ObjectTable (StringMap.singleton i_name i_value))
+                state
+            in
+            let state =
+              {
+                state with
+                scopes = (scope_ref, StringSet.singleton i_name) :: state.scopes;
+              }
+            in
+            let state =
+              List.fold_left
+                (fun state ast -> only @@ interpret_statement ctx state ast)
+                state body
+            in
+            { state with scopes = old_scopes; break = false })
+          state i_values
+      in
+      [ state ]
   | _, If1 (cond, body) ->
       interpret_statement ctx state (If2 (cond, body, Slist []))
   | _, If2 (cond, then_body, else_body) ->
@@ -500,8 +518,12 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
       let state =
         { state with scopes = (scope_ref, StringSet.empty) :: state.scopes }
       in
-      let state = List.fold_left (interpret_statement ctx) state body in
-      { state with scopes = old_scopes }
+      let state =
+        List.fold_left
+          (fun state ast -> only @@ interpret_statement ctx state ast)
+          state body
+      in
+      [ { state with scopes = old_scopes } ]
   | _, If4 (first_cond, first_body, Slist elseifs, else_body) ->
       interpret_statement ctx state
         (If3
@@ -539,7 +561,11 @@ and interpret_call (ctx : interpreter_context) (state : state)
             (fun state name value -> set_by_scope name value state)
             state params args
         in
-        let state = List.fold_left (interpret_statement ctx) state body in
+        let state =
+          List.fold_left
+            (fun state ast -> only @@ interpret_statement ctx state ast)
+            state body
+        in
         state
     | Builtin f -> f ctx state args
     | _ -> failwith "callee is not a function"
@@ -621,16 +647,16 @@ let print_heap_short (heap : heap_value list) : unit =
     (fun i v -> Printf.printf "%d: %s\n" i (show_heap_value_short v))
     heap
 
-let interpret_program (state : state) (program : ast) : state =
+let interpret_program (state : state) (program : ast) : state list =
   let program =
     match program with
     | Slist program -> program
     | _ -> failwith "expected SList"
   in
   let ctx = { on_statement = (fun _ -> ()) } in
-  List.fold_left (interpret_statement ctx) state program
+  concat_fold_left (interpret_statement ctx) [ state ] program
 
-let debug_program (state : state) (program : ast) : state =
+let debug_program (state : state) (program : ast) : state list =
   let program =
     match program with
     | Slist program -> program
@@ -644,7 +670,7 @@ let debug_program (state : state) (program : ast) : state =
           print_endline "");
     }
   in
-  List.fold_left (interpret_statement ctx) state program
+  concat_fold_left (interpret_statement ctx) [ state ] program
 
 let rec parse_hex_bytes (s : char list) : int list =
   match s with
@@ -854,10 +880,11 @@ let initial_state =
 
 let () =
   let state = initial_state in
-  let state = interpret_program state example_program in
+  let state = only @@ interpret_program state example_program in
   let state = gc_state state in
   let state =
     "_init()" |> Lua_parser.Parse.parse_from_string |> interpret_program state
+    |> only
   in
   let old_heap_size = List.length state.heap in
   let state = gc_state state in
@@ -866,5 +893,6 @@ let () =
   Printf.printf "heap size after gc: %d\n" (List.length state.heap);
   let state =
     "_update()" |> Lua_parser.Parse.parse_from_string |> debug_program state
+    |> only
   in
   ignore state
