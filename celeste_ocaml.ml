@@ -4,7 +4,7 @@ module StringSet = Set.Make (String)
 
 (* TODO WARNING some of these pico_number functions probably have mistakes*)
 
-type pico_number = Int32.t [@@deriving show]
+type pico_number = Int32.t [@@deriving show, ord]
 
 let whole_int_of_pico_number (n : pico_number) : int =
   Int32.shift_right n 16 |> Int32.to_int
@@ -66,23 +66,23 @@ type concrete_value =
   | ConcreteReference of int
   | ConcreteNil
   | ConcreteString of string
-[@@deriving show, eq]
+[@@deriving show, eq, ord]
 
 type abstract_value =
   | AbstractOneOf of concrete_value list
   | AbstractNumberRange of pico_number * pico_number
   | AbstractString
-[@@deriving show]
+[@@deriving show, ord]
 
 type any_value = Concrete of concrete_value | Abstract of abstract_value
-[@@deriving show]
+[@@deriving show, ord]
 
 type lhs_value =
   | ArrayTableElement of int * int
   | ObjectTableElement of int * string
 
-type array_table = any_value list [@@deriving show]
-type object_table = any_value StringMap.t
+type array_table = any_value list [@@deriving show, ord]
+type object_table = any_value StringMap.t [@@deriving ord]
 
 let pp_object_table (f : Format.formatter) (_t : object_table) =
   Format.fprintf f "{ %s }"
@@ -93,7 +93,7 @@ let pp_object_table (f : Format.formatter) (_t : object_table) =
           (fun (k, v) -> k ^ " = " ^ show_any_value v)
           (StringMap.to_seq _t)))
 
-type scope = int * StringSet.t
+type scope = int * StringSet.t [@@deriving ord]
 
 let pp_scope (f : Format.formatter) ((ref, values) : scope) =
   Format.fprintf f "{ %d %s }" ref
@@ -105,9 +105,9 @@ type heap_value =
   | ArrayTable of array_table
   | ObjectTable of object_table
   | UnknownTable
-  | Function of string list * ast list * scope list
+  | Function of string list * int * scope list
   | Builtin of int
-[@@deriving show]
+[@@deriving show, ord]
 
 type state = {
   heap : heap_value list;
@@ -115,7 +115,20 @@ type state = {
   return : any_value option option;
   break : bool;
 }
-[@@deriving show]
+[@@deriving show, ord]
+
+type ast_numberer = (ast, int) Hashtbl.t * (int, ast) Hashtbl.t
+
+let number_ast (tbl, rev_tbl) ast =
+  match Hashtbl.find_opt tbl ast with
+  | Some i -> i
+  | None ->
+      let i = Hashtbl.length tbl in
+      Hashtbl.add tbl ast i;
+      Hashtbl.add rev_tbl i ast;
+      i
+
+let get_numbered_ast (_, rev_tbl) i = Hashtbl.find rev_tbl i
 
 type builtin = interpreter_context -> state -> any_value list -> state list
 
@@ -123,6 +136,7 @@ and interpreter_context = {
   on_statement : ast -> unit;
   print : bool;
   builtins : builtin array;
+  ast_numberer : ast_numberer;
 }
 
 let resolve_scope (name : string) (scopes : scope list) : int option =
@@ -288,7 +302,7 @@ let rec interpret_expression (ctx : interpreter_context) (state : state)
              in
              let state, value = allocate (ObjectTable value_map) state in
              (state, None, value))
-  | FunctionE (Fbody (Elist params, Slist body)) ->
+  | FunctionE (Fbody (Elist params, body)) ->
       let params =
         List.map
           (function
@@ -296,7 +310,9 @@ let rec interpret_expression (ctx : interpreter_context) (state : state)
           params
       in
       let state, value =
-        allocate (Function (params, body, state.scopes)) state
+        allocate
+          (Function (params, number_ast ctx.ast_numberer body, state.scopes))
+          state
       in
       [ (state, None, value) ]
   | Clist [ callee_expr; Args (Elist arg_exprs) ] ->
@@ -653,7 +669,7 @@ and interpret_call (ctx : interpreter_context) (state : state)
   let state, scope_ref = allocate_raw (ObjectTable StringMap.empty) state in
   let states =
     match List.nth state.heap ref with
-    | Function (params, body, scopes) ->
+    | Function (params, body_i, scopes) ->
         let args =
           pad_or_drop (Concrete ConcreteNil) (List.length params) args
         in
@@ -667,6 +683,11 @@ and interpret_call (ctx : interpreter_context) (state : state)
           List.fold_left2
             (fun state name value -> set_by_scope name value state)
             state params args
+        in
+        let body =
+          match get_numbered_ast ctx.ast_numberer body_i with
+          | Slist body -> body
+          | _ -> failwith "body is not Slist"
         in
         concat_fold_left
           (fun state ast -> interpret_statement ctx state ast)
@@ -758,17 +779,17 @@ let print_heap_short (heap : heap_value list) : unit =
     (fun i v -> Printf.printf "%d: %s\n" i (show_heap_value_short v))
     heap
 
-let interpret_program (builtins : builtin array) (state : state) (program : ast)
-    : state list =
+let interpret_program (ctx : interpreter_context) (state : state)
+    (program : ast) : state list =
   let program =
     match program with
     | Slist program -> program
     | _ -> failwith "expected SList"
   in
-  let ctx = { on_statement = (fun _ -> ()); print = false; builtins } in
+  let ctx = { ctx with on_statement = (fun _ -> ()); print = false } in
   concat_fold_left (interpret_statement ctx) [ state ] program
 
-let debug_program (builtins : builtin array) (state : state) (program : ast) :
+let debug_program (ctx : interpreter_context) (state : state) (program : ast) :
     state list =
   let program =
     match program with
@@ -777,12 +798,12 @@ let debug_program (builtins : builtin array) (state : state) (program : ast) :
   in
   let ctx =
     {
+      ctx with
       on_statement =
         (fun stmt ->
           Lua_parser.Pp_lua.pp_lua stmt;
           print_endline "");
       print = true;
-      builtins;
     }
   in
   concat_fold_left (interpret_statement ctx) [ state ] program
@@ -980,7 +1001,7 @@ let builtin_sincos sincos _ state args =
 
 let builtin_dead _ state args = [ state ]
 
-let builtins, initial_state =
+let base_ctx, initial_state =
   let builtins =
     [
       ("print", builtin_print);
@@ -1024,15 +1045,23 @@ let builtins, initial_state =
            state)
          state
   in
-  (builtins |> List.map (fun (_, f) -> f) |> Array.of_list, state)
+  let ctx : interpreter_context =
+    {
+      on_statement = (fun _ -> ());
+      print = false;
+      builtins = builtins |> List.map (fun (_, f) -> f) |> Array.of_list;
+      ast_numberer = (Hashtbl.create 100, Hashtbl.create 100);
+    }
+  in
+  (ctx, state)
 
 let () =
   let state = initial_state in
-  let state = only @@ interpret_program builtins state example_program in
+  let state = only @@ interpret_program base_ctx state example_program in
   let state = gc_state state in
   let state =
     "_init()" |> Lua_parser.Parse.parse_from_string
-    |> interpret_program builtins state
+    |> interpret_program base_ctx state
     |> only
   in
   let old_heap_size = List.length state.heap in
@@ -1058,14 +1087,7 @@ let () =
     let states = List.map gc_state states in
     Printf.printf "states with duplicates: %d\n" (List.length states);
     flush_all ();
-    let tbl =
-      states |> List.to_seq |> Seq.map (fun s -> (s, ())) |> Hashtbl.of_seq
-    in
-    let stats = Hashtbl.stats tbl in
-    Printf.printf
-      "DEBUG stats num_bindings: %d, num_buckets: %d, max_bucket_length: %d\n"
-      stats.num_bindings stats.num_buckets stats.max_bucket_length;
-    let states = tbl |> Hashtbl.to_seq_keys |> List.of_seq in
+    let states = List.sort_uniq compare_state states in
     Printf.printf "states without duplicates: %d\n" (List.length states);
     flush_all ();
     states
@@ -1073,7 +1095,7 @@ let () =
   let states =
     List.init 91 (fun i ->
         [ Printf.sprintf "print(%d)" i; "_update()"; "_draw()" ])
-    |> List.fold_left (interpret_multi @@ interpret_program builtins) [ state ]
+    |> List.fold_left (interpret_multi @@ interpret_program base_ctx) [ state ]
   in
   (* let states = interpret_multi debug_program states [ "_update()" ] in
      let states = interpret_multi debug_program states [ "_draw()" ] in *)
