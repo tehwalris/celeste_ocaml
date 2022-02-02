@@ -65,6 +65,7 @@ type concrete_value =
   | ConcreteBoolean of bool
   | ConcreteReference of int
   | ConcreteNil
+  | ConcreteString of string
 [@@deriving show, eq]
 
 type abstract_value =
@@ -264,6 +265,7 @@ let rec interpret_expression (ctx : interpreter_context) (state : state)
   | Bool "true" -> [ (state, None, Concrete (ConcreteBoolean true)) ]
   | Bool "false" -> [ (state, None, Concrete (ConcreteBoolean false)) ]
   | Bool "nil" -> [ (state, None, Concrete ConcreteNil) ]
+  | String s -> [ (state, None, Concrete (ConcreteString s)) ]
   | Ident name ->
       let lhs_ref, lhs_name, value = get_by_scope name state in
       [ (state, Some (ObjectTableElement (lhs_ref, lhs_name)), value) ]
