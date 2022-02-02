@@ -79,7 +79,8 @@ for i=0,16 do
 end
 
 particles = {}
-for i=0,24 do
+-- HACK TODO lowered number of particles to avoid huge number of useless branches
+for i=0,3 do
 	add(particles,{
 		x=rnd(128),
 		y=rnd(128),
