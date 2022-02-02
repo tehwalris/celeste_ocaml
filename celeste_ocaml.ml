@@ -200,13 +200,17 @@ let only xs =
   | [ x ] -> x
   | _ -> failwith "list does not contain exactly one element"
 
-let rec bools_from_any_value (v : any_value) : bool list =
+let rec bools_from_any_value (v : any_value) : (bool * any_value) list =
   match v with
-  | Concrete (ConcreteBoolean b) -> [ b ]
+  | Concrete (ConcreteBoolean b) -> [ (b, v) ]
+  | Concrete (ConcreteNumber _) -> [ (true, v) ]
+  | Abstract (AbstractNumberRange _) -> [ (true, v) ]
   | Abstract (AbstractOneOf options) ->
       List.concat_map (fun o -> bools_from_any_value (Concrete o)) options
   | _ ->
-      failwith "bools_from_any_value called on value which may not be a boolean"
+      failwith
+        "bools_from_any_value called on a value which could not be converted \
+         to a boolean"
 
 let rec interpret_expression (ctx : interpreter_context) (state : state)
     (expr : ast) : (state * lhs_value option * any_value) list =
@@ -335,19 +339,23 @@ and interpret_unop (state : state) (op : string) (v : any_value) : any_value =
 and interpret_binop_maybe_short (ctx : interpreter_context) (state : state)
     (op : string) (left : any_value) (right : ast) : (state * any_value) list =
   match (op, left) with
+  | "and", _ ->
+      bools_from_any_value left
+      |> List.concat_map (fun (left_bool, left) ->
+             match left_bool with
+             | true -> interpret_rhs_expression ctx state right
+             | false -> [ (state, left) ])
+  | "or", _ ->
+      bools_from_any_value left
+      |> List.concat_map (fun (left_bool, left) ->
+             match left_bool with
+             | true -> [ (state, left) ]
+             | false -> interpret_rhs_expression ctx state right)
   | op, Abstract (AbstractOneOf left_options) ->
       left_options
       |> List.map (fun v -> Concrete v)
       |> List.concat_map (fun left ->
              interpret_binop_maybe_short ctx state op left right)
-  | "and", Concrete (ConcreteBoolean true) ->
-      interpret_rhs_expression ctx state right
-  | "and", Concrete (ConcreteBoolean false) ->
-      [ (state, Concrete (ConcreteBoolean false)) ]
-  | "or", Concrete (ConcreteBoolean true) ->
-      [ (state, Concrete (ConcreteBoolean true)) ]
-  | "or", Concrete (ConcreteBoolean false) ->
-      interpret_rhs_expression ctx state right
   | _ ->
       let state, right = only @@ interpret_rhs_expression ctx state right in
       [ (state, interpret_binop_not_short state op left right) ]
@@ -529,7 +537,7 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
         interpret_rhs_expression ctx state cond
         |> List.concat_map (fun (state, value) ->
                bools_from_any_value value
-               |> List.map (fun value -> (state, (state, value))))
+               |> List.map (fun (value, _) -> (state, (state, value))))
       in
       concat_fold_left_map interpret_condition [ state ] branches
       |> List.concat_map (fun (_, matches) ->
@@ -903,6 +911,9 @@ let initial_state =
         ("btn", builtin_btn);
         ("music", builtin_dead);
         ("sfx", builtin_dead);
+        ("pal", builtin_dead);
+        ("rectfill", builtin_dead);
+        ("map", builtin_dead);
       ]
   in
   state
@@ -921,6 +932,19 @@ let () =
   Printf.printf "heap size before gc: %d\n" old_heap_size;
   Printf.printf "heap size after gc: %d\n" (List.length state.heap);
   let states =
-    "_update()" |> Lua_parser.Parse.parse_from_string |> debug_program state
+    [ "_update()"; "_draw()" ]
+    |> List.fold_left
+         (fun states stmt_str ->
+           print_endline stmt_str;
+           let states =
+             List.concat_map
+               (fun state ->
+                 stmt_str |> Lua_parser.Parse.parse_from_string
+                 |> debug_program state)
+               states
+           in
+           Printf.printf "possible executions: %d\n" (List.length states);
+           states)
+         [ state ]
   in
-  Printf.printf "possible executions: %d\n" (List.length states)
+  ignore states
