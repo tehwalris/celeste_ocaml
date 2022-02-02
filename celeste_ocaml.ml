@@ -71,6 +71,7 @@ type concrete_value =
 type abstract_value =
   | AbstractOneOf of concrete_value list
   | AbstractNumberRange of pico_number * pico_number
+  | AbstractString
 [@@deriving show]
 
 type any_value = Concrete of concrete_value | Abstract of abstract_value
@@ -195,9 +196,11 @@ let rec bools_of_any_value (v : any_value) : (bool * any_value) list =
   match v with
   | Concrete (ConcreteBoolean b) -> [ (b, v) ]
   | Concrete (ConcreteNumber _) -> [ (true, v) ]
+  | Concrete ConcreteNil -> [ (false, v) ]
   | Abstract (AbstractNumberRange _) -> [ (true, v) ]
   | Abstract (AbstractOneOf options) ->
       List.concat_map (fun o -> bools_of_any_value (Concrete o)) options
+  | Abstract AbstractString -> [ (true, v) ]
   | _ ->
       failwith
         "bools_from_any_value called on a value which could not be converted \
@@ -452,6 +455,7 @@ and interpret_binop_not_short (state : state) (op : string) (left : any_value)
       compare_range
         (number_range_of_any_value left)
         (number_range_of_any_value right)
+  | "..", _, _ -> Abstract AbstractString
   | _ ->
       failwith
         (Printf.sprintf "unsupported op: %s %s %s" (show_any_value left) op
@@ -721,6 +725,7 @@ and map_references_abstract_value f v : abstract_value =
   | AbstractOneOf values ->
       AbstractOneOf (List.map (map_references_concrete_value f) values)
   | AbstractNumberRange _ -> v
+  | AbstractString -> v
 
 and map_references_any_value f v : any_value =
   match v with
@@ -1032,7 +1037,8 @@ let () =
         states)
   in
   let states =
-    List.init 82 (fun _ -> [ "_update()"; "_draw()" ])
+    List.init 100 (fun i ->
+        [ Printf.sprintf "print(%d)" i; "_update()"; "_draw()" ])
     |> List.flatten
     |> interpret_multi interpret_program [ state ]
   in
