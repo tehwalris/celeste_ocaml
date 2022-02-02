@@ -804,6 +804,17 @@ let builtin_count ctx state args =
     (Concrete (ConcreteNumber (pico_number_of_int @@ List.length values)))
     state
 
+let builtin_btn ctx state args =
+  let i =
+    match args with
+    | [ Concrete (ConcreteNumber n) ] -> int_of_pico_number n
+    | _ -> failwith "bad arguments to btn"
+  in
+  assert (i >= 0 && i <= 5);
+  return_from_builtin
+    (Abstract (AbstractOneOf [ ConcreteBoolean false; ConcreteBoolean true ]))
+    state
+
 let builtin_dead _ state args = state
 
 let initial_state =
@@ -834,6 +845,7 @@ let initial_state =
         ("max", builtin_max);
         ("abs", builtin_abs);
         ("count", builtin_count);
+        ("btn", builtin_btn);
         ("music", builtin_dead);
         ("sfx", builtin_dead);
       ]
