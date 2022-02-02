@@ -98,7 +98,7 @@ let pp_scope (f : Format.formatter) ((ref, values) : scope) =
   Format.fprintf f "{ %d %s }" ref
     (Seq.fold_left (fun a b -> a ^ "; " ^ b) "" (StringSet.to_seq values))
 
-type interpreter_context = { on_statement : ast -> unit }
+type interpreter_context = { on_statement : ast -> unit; print : bool }
 type identifier = Identifier of string [@@deriving show]
 
 type heap_value =
@@ -165,10 +165,10 @@ let pad_or_drop p n l =
   if List.length l > n then BatList.take n l
   else l @ List.init (n - List.length l) (fun _ -> p)
 
-let int_of_any_value v =
+let concrete_number_of_any_value v =
   match v with
-  | Concrete (ConcreteNumber n) -> int_of_pico_number n
-  | _ -> failwith "i_from is not an integer"
+  | Concrete (ConcreteNumber n) -> n
+  | _ -> failwith "not a concrete number"
 
 let concat_fold_left f init list =
   List.fold_left (fun xs y -> List.concat_map (fun x -> f x y) xs) init list
@@ -534,14 +534,17 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
   | _, Break -> [ { state with break = true } ]
   | _, For1 (Ident i_name, i_from, i_to, Slist body) ->
       let state, i_from = only @@ interpret_rhs_expression ctx state i_from in
-      let i_from = int_of_any_value i_from in
+      let i_from = concrete_number_of_any_value i_from in
       let state, i_to = only @@ interpret_rhs_expression ctx state i_to in
-      let i_to = int_of_any_value i_to in
+      let i_to = concrete_number_of_any_value i_to in
       assert (i_from <= i_to);
       let i_values =
-        List.init
-          (i_to - i_from + 1)
-          (fun i -> Concrete (ConcreteNumber (pico_number_of_int (i_from + i))))
+        BatEnum.unfold i_from (fun i ->
+            if i <= i_to then
+              Some
+                (Concrete (ConcreteNumber i), Int32.add i (pico_number_of_int 1))
+            else None)
+        |> BatList.of_enum
       in
       let state =
         List.fold_left
@@ -747,7 +750,7 @@ let interpret_program (state : state) (program : ast) : state list =
     | Slist program -> program
     | _ -> failwith "expected SList"
   in
-  let ctx = { on_statement = (fun _ -> ()) } in
+  let ctx = { on_statement = (fun _ -> ()); print = false } in
   concat_fold_left (interpret_statement ctx) [ state ] program
 
 let debug_program (state : state) (program : ast) : state list =
@@ -762,6 +765,7 @@ let debug_program (state : state) (program : ast) : state list =
         (fun stmt ->
           Lua_parser.Pp_lua.pp_lua stmt;
           print_endline "");
+      print = true;
     }
   in
   concat_fold_left (interpret_statement ctx) [ state ] program
@@ -797,8 +801,8 @@ let return_from_builtin (value : any_value) (state : state) : state =
   assert (not (is_skipping state));
   { state with return = Some (Some value) }
 
-let builtin_print _ state args =
-  List.iter (fun v -> print_endline (show_any_value v)) args;
+let builtin_print ctx state args =
+  if ctx.print then List.iter (fun v -> print_endline (show_any_value v)) args;
   [ state ]
 
 let builtin_add _ state args =
@@ -976,7 +980,7 @@ let initial_state =
         state)
       state
       [
-        ("print", builtin_dead);
+        ("print", builtin_print);
         ("add", builtin_add);
         ("rnd", builtin_rnd);
         ("flr", builtin_flr);
@@ -1028,10 +1032,10 @@ let () =
         states)
   in
   let states =
-    List.init 79 (fun _ -> [ "_update()"; "_draw()" ])
+    List.init 82 (fun _ -> [ "_update()"; "_draw()" ])
     |> List.flatten
     |> interpret_multi interpret_program [ state ]
   in
-  let states = interpret_multi interpret_program states [ "_update()" ] in
-  let states = interpret_multi debug_program states [ "_draw()" ] in
+  (* let states = interpret_multi debug_program states [ "_update()" ] in
+     let states = interpret_multi debug_program states [ "_draw()" ] in *)
   ignore states
