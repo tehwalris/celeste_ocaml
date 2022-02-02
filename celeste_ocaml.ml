@@ -263,20 +263,21 @@ let rec interpret_expression (ctx : interpreter_context) (state : state)
                 failwith "unsupported table initializer")
           initializer_asts
       in
-      let state, initializer_values =
-        List.fold_left_map
-          (fun state (_, expr) ->
-            only @@ interpret_rhs_expression ctx state expr)
-          state initializers
+      let initializations =
+        concat_fold_left_map
+          (fun state (_, expr) -> interpret_rhs_expression ctx state expr)
+          [ state ] initializers
       in
-      let value_map =
-        List.map2
-          (fun (name, _) value -> (name, value))
-          initializers initializer_values
-        |> List.to_seq |> StringMap.of_seq
-      in
-      let state, value = allocate (ObjectTable value_map) state in
-      [ (state, None, value) ]
+      initializations
+      |> List.map (fun (state, initializer_values) ->
+             let value_map =
+               List.map2
+                 (fun (name, _) value -> (name, value))
+                 initializers initializer_values
+               |> List.to_seq |> StringMap.of_seq
+             in
+             let state, value = allocate (ObjectTable value_map) state in
+             (state, None, value))
   | FunctionE (Fbody (Elist params, Slist body)) ->
       let params =
         List.map
@@ -344,9 +345,10 @@ let rec interpret_expression (ctx : interpreter_context) (state : state)
       let state, value = only @@ interpret_rhs_expression ctx state value in
       [ (state, None, interpret_unop state op value) ]
   | Binop (op, left, right) ->
-      let state, left = only @@ interpret_rhs_expression ctx state left in
-      interpret_binop_maybe_short ctx state op left right
-      |> List.map (fun (state, value) -> (state, None, value))
+      interpret_rhs_expression ctx state left
+      |> List.concat_map (fun (state, left) ->
+             interpret_binop_maybe_short ctx state op left right
+             |> List.map (fun (state, value) -> (state, None, value)))
   | Pexp expr -> interpret_expression ctx state expr
   | _ ->
       Lua_parser.Pp_ast.pp_ast_show expr;
@@ -384,8 +386,9 @@ and interpret_binop_maybe_short (ctx : interpreter_context) (state : state)
       |> List.concat_map (fun left ->
              interpret_binop_maybe_short ctx state op left right)
   | _ ->
-      let state, right = only @@ interpret_rhs_expression ctx state right in
-      [ (state, interpret_binop_not_short state op left right) ]
+      interpret_rhs_expression ctx state right
+      |> List.map (fun (state, right) ->
+             (state, interpret_binop_not_short state op left right))
 
 (* TODO WARNING some of these binop handlers probably have mistakes*)
 and interpret_binop_not_short (state : state) (op : string) (left : any_value)
@@ -465,30 +468,33 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
         | state, Some lhs, _ -> (state, lhs)
         | _, None, _ -> failwith "assignment to non-lhs expression"
       in
-      let state, value = only @@ interpret_rhs_expression ctx state expr in
-      let update_array_table lhs_index = function
-        | ArrayTable values ->
-            ArrayTable (map_ith lhs_index (fun _ -> value) values)
-        | _ ->
-            failwith
-              "lhs of assignment references something that's not an ArrayTable"
-      in
-      let update_object_table lhs_name = function
-        | ObjectTable o -> ObjectTable (StringMap.add lhs_name value o)
-        | UnknownTable -> ObjectTable (StringMap.singleton lhs_name value)
-        | _ ->
-            failwith
-              "lhs of assignment references something that's not an \
-               ObjectTable or UnknownTable"
-      in
-      let lhs_ref, update_table =
-        match lhs with
-        | ArrayTableElement (lhs_ref, lhs_index) ->
-            (lhs_ref, update_array_table lhs_index)
-        | ObjectTableElement (lhs_ref, lhs_name) ->
-            (lhs_ref, update_object_table lhs_name)
-      in
-      [ { state with heap = map_ith lhs_ref update_table state.heap } ]
+      interpret_rhs_expression ctx state expr
+      |> List.map (fun (state, value) ->
+             let update_array_table lhs_index = function
+               | ArrayTable values ->
+                   ArrayTable (map_ith lhs_index (fun _ -> value) values)
+               | _ ->
+                   failwith
+                     "lhs of assignment references something that's not an \
+                      ArrayTable"
+             in
+             let update_object_table lhs_name = function
+               | ObjectTable o -> ObjectTable (StringMap.add lhs_name value o)
+               | UnknownTable ->
+                   ObjectTable (StringMap.singleton lhs_name value)
+               | _ ->
+                   failwith
+                     "lhs of assignment references something that's not an \
+                      ObjectTable or UnknownTable"
+             in
+             let lhs_ref, update_table =
+               match lhs with
+               | ArrayTableElement (lhs_ref, lhs_index) ->
+                   (lhs_ref, update_array_table lhs_index)
+               | ObjectTableElement (lhs_ref, lhs_name) ->
+                   (lhs_ref, update_object_table lhs_name)
+             in
+             { state with heap = map_ith lhs_ref update_table state.heap })
   | _, Lassign (Elist [ Ident name ], expr) ->
       let state =
         only @@ interpret_statement ctx state (Lnames (Elist [ Ident name ]))
@@ -698,6 +704,7 @@ and map_references_concrete_value f v : concrete_value =
   | ConcreteBoolean _ -> v
   | ConcreteReference old_ref -> ConcreteReference (f old_ref)
   | ConcreteNil -> v
+  | ConcreteString _ -> v
 
 and map_references_abstract_value f v : abstract_value =
   match v with
@@ -962,7 +969,7 @@ let initial_state =
         state)
       state
       [
-        ("print", builtin_print);
+        ("print", builtin_dead);
         ("add", builtin_add);
         ("rnd", builtin_rnd);
         ("flr", builtin_flr);
@@ -980,7 +987,9 @@ let initial_state =
         ("sfx", builtin_dead);
         ("pal", builtin_dead);
         ("rectfill", builtin_dead);
+        ("circfill", builtin_dead);
         ("map", builtin_dead);
+        ("spr", builtin_dead);
       ]
   in
   state
@@ -998,20 +1007,24 @@ let () =
   print_heap_short state.heap;
   Printf.printf "heap size before gc: %d\n" old_heap_size;
   Printf.printf "heap size after gc: %d\n" (List.length state.heap);
-  let states =
-    [ "_update()"; "_draw()" ]
-    |> List.fold_left
-         (fun states stmt_str ->
-           print_endline stmt_str;
-           let states =
-             List.concat_map
-               (fun state ->
+  let interpret_multi interpret_or_debug_program =
+    List.fold_left (fun states stmt_str ->
+        print_endline stmt_str;
+        let states =
+          states
+          |> List.concat_map (fun state ->
                  stmt_str |> Lua_parser.Parse.parse_from_string
-                 |> debug_program state)
-               states
-           in
-           Printf.printf "possible executions: %d\n" (List.length states);
-           states)
-         [ state ]
+                 |> interpret_or_debug_program state)
+          |> List.map gc_state
+        in
+        Printf.printf "possible executions: %d\n" (List.length states);
+        states)
   in
+  let states =
+    List.init 79 (fun _ -> [ "_update()"; "_draw()" ])
+    |> List.flatten
+    |> interpret_multi interpret_program [ state ]
+  in
+  let states = interpret_multi interpret_program states [ "_update()" ] in
+  let states = interpret_multi debug_program states [ "_draw()" ] in
   ignore states
