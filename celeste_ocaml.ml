@@ -122,7 +122,7 @@ type heap_value =
   | ObjectTable of object_table
   | UnknownTable
   | Function of string list * ast list * scope list
-  | Builtin of (interpreter_context -> state -> any_value list -> state)
+  | Builtin of (interpreter_context -> state -> any_value list -> state list)
 [@@deriving show]
 
 and state = {
@@ -220,6 +220,24 @@ let rec bools_of_any_value (v : any_value) : (bool * any_value) list =
       failwith
         "bools_from_any_value called on a value which could not be converted \
          to a boolean"
+
+let rec any_value_of_bools_direct (maybe_false : bool) (maybe_true : bool) :
+    any_value =
+  match (maybe_false, maybe_true) with
+  | false, false -> Abstract (AbstractOneOf [])
+  | false, true -> Concrete (ConcreteBoolean true)
+  | true, false -> Concrete (ConcreteBoolean false)
+  | true, true ->
+      Abstract (AbstractOneOf [ ConcreteBoolean false; ConcreteBoolean true ])
+
+let rec any_value_of_bools (bools : bool list) : any_value =
+  let maybe_false, maybe_true =
+    List.fold_left
+      (fun (maybe_false, maybe_true) b ->
+        (maybe_false || not b, maybe_true || b))
+      (false, false) bools
+  in
+  any_value_of_bools_direct maybe_false maybe_true
 
 let rec number_range_of_any_value (v : any_value) : pico_number * pico_number =
   match v with
@@ -426,19 +444,28 @@ and interpret_binop_not_short (state : state) (op : string) (left : any_value)
       Concrete (ConcreteBoolean (equal_concrete_value left right))
   | "~=", Concrete left, Concrete right ->
       Concrete (ConcreteBoolean (not @@ equal_concrete_value left right))
-  | "<", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right)
-  | "<=", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right)
-  | ">", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right)
-  | ">=", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
-      Concrete
-        (ConcreteBoolean
-           ((match op with
-            | "<" -> ( < )
-            | "<=" -> ( <= )
-            | ">" -> ( > )
-            | ">=" -> ( >= )
-            | _ -> failwith "unreachable")
-              (Int32.compare left right) 0))
+  | "<", _, _ | "<=", _, _ | ">", _, _ | ">=", _, _ ->
+      let compare_concrete left right =
+        (match op with
+        | "<" -> ( < )
+        | "<=" -> ( <= )
+        | ">" -> ( > )
+        | ">=" -> ( >= )
+        | _ -> failwith "unreachable")
+          (Int32.compare left right) 0
+      in
+      let compare_range (left_min, left_max) (right_min, right_max) =
+        any_value_of_bools
+          [
+            compare_concrete left_min right_min;
+            compare_concrete left_min right_max;
+            compare_concrete left_max right_min;
+            compare_concrete left_max right_max;
+          ]
+      in
+      compare_range
+        (number_range_of_any_value left)
+        (number_range_of_any_value right)
   | _ ->
       failwith
         (Printf.sprintf "unsupported op: %s %s %s" (show_any_value left) op
@@ -634,7 +661,7 @@ and interpret_call (ctx : interpreter_context) (state : state)
         concat_fold_left
           (fun state ast -> interpret_statement ctx state ast)
           [ state ] body
-    | Builtin f -> [ f ctx state args ]
+    | Builtin f -> f ctx state args
     | _ -> failwith "callee is not a function"
   in
   List.map
@@ -775,7 +802,7 @@ let return_from_builtin (value : any_value) (state : state) : state =
 
 let builtin_print _ state args =
   List.iter (fun v -> print_endline (show_any_value v)) args;
-  state
+  [ state ]
 
 let builtin_add _ state args =
   let target_ref, value =
@@ -788,7 +815,7 @@ let builtin_add _ state args =
     | UnknownTable -> ArrayTable [ value ]
     | _ -> failwith "expected ArrayTable or UnknownTable"
   in
-  { state with heap = map_ith target_ref update_table state.heap }
+  [ { state with heap = map_ith target_ref update_table state.heap } ]
 
 let builtin_rnd _ state args =
   let max =
@@ -797,9 +824,11 @@ let builtin_rnd _ state args =
     | _ -> failwith "bad arguments to rnd"
   in
   assert (max >= pico_number_of_int 0);
-  return_from_builtin
-    (Abstract (AbstractNumberRange (pico_number_of_int 0, max)))
-    state
+  [
+    return_from_builtin
+      (Abstract (AbstractNumberRange (pico_number_of_int 0, max)))
+      state;
+  ]
 
 let builtin_flr _ state args =
   let flr_pico (n : pico_number) : pico_number =
@@ -812,7 +841,7 @@ let builtin_flr _ state args =
         Abstract (AbstractNumberRange (flr_pico min, flr_pico max))
     | _ -> failwith "bad arguments to flr"
   in
-  return_from_builtin result state
+  [ return_from_builtin result state ]
 
 let builtin_foreach ctx state args =
   let table_ref, cb =
@@ -829,7 +858,7 @@ let builtin_foreach ctx state args =
   let call_iteration state value =
     interpret_call ctx state cb [ value ] |> List.map (fun (state, _) -> state)
   in
-  only @@ concat_fold_left call_iteration [ state ] values
+  concat_fold_left call_iteration [ state ] values
 
 let builtin_mget _ state args =
   let x, y =
@@ -842,7 +871,9 @@ let builtin_mget _ state args =
   let y = int_of_pico_number y in
   assert (y >= 0 && y < 64);
   let v = Array.get map_data (x + (y * 128)) in
-  return_from_builtin (Concrete (ConcreteNumber (pico_number_of_int v))) state
+  [
+    return_from_builtin (Concrete (ConcreteNumber (pico_number_of_int v))) state;
+  ]
 
 let builtin_fget _ state args =
   let i, b =
@@ -854,9 +885,11 @@ let builtin_fget _ state args =
   let b = int_of_pico_number b in
   assert (b >= 0 && b < 8);
   let v = Array.get flag_data i in
-  return_from_builtin
-    (Concrete (ConcreteBoolean (Int.logand v (Int.shift_left 1 b) != 0)))
-    state
+  [
+    return_from_builtin
+      (Concrete (ConcreteBoolean (Int.logand v (Int.shift_left 1 b) != 0)))
+      state;
+  ]
 
 let builtin_minmax minmax _ state args =
   let (a_min, a_max), (b_min, b_max) =
@@ -864,9 +897,11 @@ let builtin_minmax minmax _ state args =
     | [ a; b ] -> (number_range_of_any_value a, number_range_of_any_value b)
     | _ -> failwith "bad arguments to min/max"
   in
-  return_from_builtin
-    (any_value_of_number_range (minmax a_min b_min) (minmax a_max b_max))
-    state
+  [
+    return_from_builtin
+      (any_value_of_number_range (minmax a_min b_min) (minmax a_max b_max))
+      state;
+  ]
 
 let builtin_abs _ state args =
   let abs_pico (n : pico_number) : pico_number = Int32.abs n in
@@ -875,7 +910,7 @@ let builtin_abs _ state args =
     | [ Concrete (ConcreteNumber v) ] -> Concrete (ConcreteNumber (abs_pico v))
     | _ -> failwith "bad arguments to abs"
   in
-  return_from_builtin result state
+  [ return_from_builtin result state ]
 
 let builtin_count ctx state args =
   let table_ref =
@@ -889,9 +924,11 @@ let builtin_count ctx state args =
     | UnknownTable -> []
     | _ -> failwith "expected ArrayTable or UnknownTable"
   in
-  return_from_builtin
-    (Concrete (ConcreteNumber (pico_number_of_int @@ List.length values)))
-    state
+  [
+    return_from_builtin
+      (Concrete (ConcreteNumber (pico_number_of_int @@ List.length values)))
+      state;
+  ]
 
 let builtin_btn ctx state args =
   let i =
@@ -900,9 +937,11 @@ let builtin_btn ctx state args =
     | _ -> failwith "bad arguments to btn"
   in
   assert (i >= 0 && i <= 5);
-  return_from_builtin
-    (Abstract (AbstractOneOf [ ConcreteBoolean false; ConcreteBoolean true ]))
-    state
+  [
+    return_from_builtin
+      (Abstract (AbstractOneOf [ ConcreteBoolean false; ConcreteBoolean true ]))
+      state;
+  ]
 
 let builtin_sincos sincos _ state args =
   let sincos_pico a =
@@ -919,9 +958,9 @@ let builtin_sincos sincos _ state args =
           (AbstractNumberRange (pico_number_of_int (-1), pico_number_of_int 1))
     | _ -> failwith "bad arguments to sin/cos"
   in
-  return_from_builtin result state
+  [ return_from_builtin result state ]
 
-let builtin_dead _ state args = state
+let builtin_dead _ state args = [ state ]
 
 let initial_state =
   let state =
