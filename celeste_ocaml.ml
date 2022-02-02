@@ -357,8 +357,6 @@ and interpret_binop_not_short (state : state) (op : string) (left : any_value)
     (right : any_value) : any_value =
   match (op, left, right) with
   | "+", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
-      Printf.printf "left %s, right %s\n" (show_pico_number left)
-        (show_pico_number right);
       Concrete (ConcreteNumber (Int32.add left right))
   | ( "+",
       Concrete (ConcreteNumber left),
