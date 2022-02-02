@@ -7,10 +7,15 @@ module StringSet = Set.Make (String)
 type pico_number = Int32.t [@@deriving show]
 
 let whole_int_of_pico_number (n : pico_number) : int =
-  Int32.shift_right_logical n 16 |> Int32.to_int
+  Int32.shift_right n 16 |> Int32.to_int
 
 let fraction_int_of_pico_number (n : pico_number) : int =
   Int32.shift_right_logical (Int32.shift_left n 16) 16 |> Int32.to_int
+
+let float_of_pico_number (n : pico_number) : float =
+  let whole = Float.of_int @@ whole_int_of_pico_number n in
+  let fraction = Float.of_int @@ fraction_int_of_pico_number n in
+  whole +. (fraction /. 65536.)
 
 let pp_pico_number (f : Format.formatter) (n : pico_number) =
   Format.fprintf f "(pico_number %d + (%d / 65536))"
@@ -18,6 +23,8 @@ let pp_pico_number (f : Format.formatter) (n : pico_number) =
     (fraction_int_of_pico_number n)
 
 let pico_number_of_ints (whole_n : int) (fraction_n : int) : pico_number =
+  assert (whole_n >= -32768 && fraction_n < 32768);
+  assert (fraction_n >= 0 && fraction_n < 65536);
   let pico_n =
     Int32.logor
       (Int32.shift_left (Int32.of_int whole_n) 16)
@@ -30,8 +37,10 @@ let pico_number_of_ints (whole_n : int) (fraction_n : int) : pico_number =
 let pico_number_of_int (n : int) : pico_number = pico_number_of_ints n 0
 
 let rec pico_number_of_float (n : float) : pico_number =
-  assert (n >= 0.);
-  pico_number_of_ints (int_of_float n) (int_of_float ((n -. floor n) *. 32767.))
+  if n < 0. then Int32.neg @@ pico_number_of_float (-.n)
+  else
+    pico_number_of_ints (int_of_float n)
+      (int_of_float ((n -. floor n) *. 32767.))
 
 let pico_number_of_string n = n |> float_of_string |> pico_number_of_float
 
@@ -371,6 +380,12 @@ and interpret_binop_not_short (state : state) (op : string) (left : any_value)
       Abstract (AbstractNumberRange (right_min, right_max)) ) ->
       Abstract
         (AbstractNumberRange (Int32.add left right_min, Int32.add left right_max))
+  | ( "+",
+      Abstract (AbstractNumberRange (left_min, left_max)),
+      Abstract (AbstractNumberRange (right_min, right_max)) ) ->
+      Abstract
+        (AbstractNumberRange
+           (Int32.add left_min right_min, Int32.add left_max right_max))
   | "-", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
       Concrete (ConcreteNumber (Int32.sub left right))
   | "/", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
@@ -878,6 +893,23 @@ let builtin_btn ctx state args =
     (Abstract (AbstractOneOf [ ConcreteBoolean false; ConcreteBoolean true ]))
     state
 
+let builtin_sincos sincos _ state args =
+  let sincos_pico a =
+    a |> float_of_pico_number
+    |> (fun a -> sincos (1. -. a) *. 2. *. Float.pi)
+    |> pico_number_of_float
+  in
+  let result =
+    match args with
+    | [ Concrete (ConcreteNumber v) ] ->
+        Concrete (ConcreteNumber (sincos_pico v))
+    | [ Abstract (AbstractNumberRange _) ] ->
+        Abstract
+          (AbstractNumberRange (pico_number_of_int (-1), pico_number_of_int 1))
+    | _ -> failwith "bad arguments to sin/cos"
+  in
+  return_from_builtin result state
+
 let builtin_dead _ state args = state
 
 let initial_state =
@@ -909,6 +941,8 @@ let initial_state =
         ("abs", builtin_abs);
         ("count", builtin_count);
         ("btn", builtin_btn);
+        ("sin", builtin_sincos sin);
+        ("cos", builtin_sincos cos);
         ("music", builtin_dead);
         ("sfx", builtin_dead);
         ("pal", builtin_dead);
