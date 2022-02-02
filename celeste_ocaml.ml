@@ -581,13 +581,20 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
           (Elseif (first_cond, first_body)
           :: (elseifs @ [ Elseif (Bool "true", Slist []) ]))
       in
-      let interpret_condition state (cond, _) : (state * (state * bool)) list =
-        interpret_rhs_expression ctx state cond
-        |> List.concat_map (fun (state, value) ->
-               bools_of_any_value value
-               |> List.map (fun (value, _) -> (state, (state, value))))
+      let interpret_condition (state, already_matched) (cond, _) :
+          (state * bool) list =
+        if already_matched then [ (state, true) ]
+        else
+          interpret_rhs_expression ctx state cond
+          |> List.concat_map (fun (state, value) ->
+                 bools_of_any_value value
+                 |> List.map (fun (value, _) -> (state, value)))
       in
-      concat_fold_left_map interpret_condition [ state ] branches
+      concat_fold_left_map
+        (fun acc cond ->
+          interpret_condition acc cond |> List.map (fun v -> (v, v)))
+        [ (state, false) ]
+        branches
       |> List.concat_map (fun (_, matches) ->
              let state, _, body =
                List.map2
