@@ -522,7 +522,8 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
           (function
             | Elseif (cond, Slist body) -> (cond, body)
             | _ -> failwith "expected Elseif")
-          (Elseif (first_cond, first_body) :: elseifs)
+          (Elseif (first_cond, first_body)
+          :: (elseifs @ [ Elseif (Bool "true", Slist []) ]))
       in
       let interpret_condition state (cond, _) : (state * (state * bool)) list =
         interpret_rhs_expression ctx state cond
