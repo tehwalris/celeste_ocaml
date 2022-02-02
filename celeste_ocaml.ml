@@ -209,17 +209,34 @@ let only xs =
   | [ x ] -> x
   | _ -> failwith "list does not contain exactly one element"
 
-let rec bools_from_any_value (v : any_value) : (bool * any_value) list =
+let rec bools_of_any_value (v : any_value) : (bool * any_value) list =
   match v with
   | Concrete (ConcreteBoolean b) -> [ (b, v) ]
   | Concrete (ConcreteNumber _) -> [ (true, v) ]
   | Abstract (AbstractNumberRange _) -> [ (true, v) ]
   | Abstract (AbstractOneOf options) ->
-      List.concat_map (fun o -> bools_from_any_value (Concrete o)) options
+      List.concat_map (fun o -> bools_of_any_value (Concrete o)) options
   | _ ->
       failwith
         "bools_from_any_value called on a value which could not be converted \
          to a boolean"
+
+let rec number_range_of_any_value (v : any_value) : pico_number * pico_number =
+  match v with
+  | Concrete (ConcreteNumber v) -> (v, v)
+  | Abstract (AbstractNumberRange (v_min, v_max)) ->
+      assert (v_min <= v_max);
+      (v_min, v_max)
+  | _ ->
+      failwith
+        "number_range_from_any_value called on a value which could not be \
+         converted to a number range"
+
+let rec any_value_of_number_range (v_min : pico_number) (v_max : pico_number) :
+    any_value =
+  assert (v_min <= v_max);
+  if v_min == v_max then Concrete (ConcreteNumber v_min)
+  else Abstract (AbstractNumberRange (v_min, v_max))
 
 let rec interpret_expression (ctx : interpreter_context) (state : state)
     (expr : ast) : (state * lhs_value option * any_value) list =
@@ -349,13 +366,13 @@ and interpret_binop_maybe_short (ctx : interpreter_context) (state : state)
     (op : string) (left : any_value) (right : ast) : (state * any_value) list =
   match (op, left) with
   | "and", _ ->
-      bools_from_any_value left
+      bools_of_any_value left
       |> List.concat_map (fun (left_bool, left) ->
              match left_bool with
              | true -> interpret_rhs_expression ctx state right
              | false -> [ (state, left) ])
   | "or", _ ->
-      bools_from_any_value left
+      bools_of_any_value left
       |> List.concat_map (fun (left_bool, left) ->
              match left_bool with
              | true -> [ (state, left) ]
@@ -551,7 +568,7 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
       let interpret_condition state (cond, _) : (state * (state * bool)) list =
         interpret_rhs_expression ctx state cond
         |> List.concat_map (fun (state, value) ->
-               bools_from_any_value value
+               bools_of_any_value value
                |> List.map (fun (value, _) -> (state, (state, value))))
       in
       concat_fold_left_map interpret_condition [ state ] branches
@@ -841,21 +858,15 @@ let builtin_fget _ state args =
     (Concrete (ConcreteBoolean (Int.logand v (Int.shift_left 1 b) != 0)))
     state
 
-let builtin_min _ state args =
-  let a, b =
+let builtin_minmax minmax _ state args =
+  let (a_min, a_max), (b_min, b_max) =
     match args with
-    | [ Concrete (ConcreteNumber a); Concrete (ConcreteNumber b) ] -> (a, b)
-    | _ -> failwith "bad arguments to min"
+    | [ a; b ] -> (number_range_of_any_value a, number_range_of_any_value b)
+    | _ -> failwith "bad arguments to min/max"
   in
-  return_from_builtin (Concrete (ConcreteNumber (Int32.min a b))) state
-
-let builtin_max _ state args =
-  let a, b =
-    match args with
-    | [ Concrete (ConcreteNumber a); Concrete (ConcreteNumber b) ] -> (a, b)
-    | _ -> failwith "bad arguments to max"
-  in
-  return_from_builtin (Concrete (ConcreteNumber (Int32.max a b))) state
+  return_from_builtin
+    (any_value_of_number_range (minmax a_min b_min) (minmax a_max b_max))
+    state
 
 let builtin_abs _ state args =
   let abs_pico (n : pico_number) : pico_number = Int32.abs n in
@@ -936,8 +947,8 @@ let initial_state =
         ("foreach", builtin_foreach);
         ("mget", builtin_mget);
         ("fget", builtin_fget);
-        ("min", builtin_min);
-        ("max", builtin_max);
+        ("min", builtin_minmax min);
+        ("max", builtin_minmax max);
         ("abs", builtin_abs);
         ("count", builtin_count);
         ("btn", builtin_btn);
