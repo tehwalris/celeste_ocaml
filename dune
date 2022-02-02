@@ -1,5 +1,5 @@
 (executable
  (name celeste_ocaml)
- (libraries bigarray gmp apron apron.octD lua_parser.lib batteries)
+ (libraries bigarray gmp apron apron.octD lua_parser.lib batteries landmarks)
  (preprocess
-  (pps ppx_deriving.show ppx_deriving.eq)))
+  (pps ppx_deriving.show ppx_deriving.eq landmarks-ppx --auto)))

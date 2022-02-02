@@ -1023,24 +1023,33 @@ let () =
   print_heap_short state.heap;
   Printf.printf "heap size before gc: %d\n" old_heap_size;
   Printf.printf "heap size after gc: %d\n" (List.length state.heap);
-  let interpret_multi interpret_or_debug_program =
-    List.fold_left (fun states stmt_str ->
-        print_endline stmt_str;
-        let states =
-          states
-          |> List.concat_map (fun state ->
-                 stmt_str |> Lua_parser.Parse.parse_from_string
-                 |> interpret_or_debug_program state)
-          |> List.map gc_state
-        in
-        Printf.printf "possible executions: %d\n" (List.length states);
-        states)
+  let interpret_multi interpret_or_debug_program states stmt_strs =
+    let states =
+      List.fold_left
+        (fun states stmt_str ->
+          print_endline stmt_str;
+          let interpret =
+            stmt_str |> Lua_parser.Parse.parse_from_string |> fun ast state ->
+            interpret_or_debug_program state ast
+          in
+          states |> List.concat_map interpret)
+        states stmt_strs
+    in
+    print_endline "before gc";
+    let states = List.map gc_state states in
+    Printf.printf "states with duplicates: %d\n" (List.length states);
+    let tbl = Hashtbl.create (List.length states) in
+    states |> List.to_seq
+    |> Seq.map (fun s -> (s, ()))
+    |> Hashtbl.replace_seq tbl;
+    let states = tbl |> Hashtbl.to_seq_keys |> List.of_seq in
+    Printf.printf "states without duplicates: %d\n" (List.length states);
+    states
   in
   let states =
-    List.init 100 (fun i ->
+    List.init 89 (fun i ->
         [ Printf.sprintf "print(%d)" i; "_update()"; "_draw()" ])
-    |> List.flatten
-    |> interpret_multi interpret_program [ state ]
+    |> List.fold_left (interpret_multi interpret_program) [ state ]
   in
   (* let states = interpret_multi debug_program states [ "_update()" ] in
      let states = interpret_multi debug_program states [ "_draw()" ] in *)
