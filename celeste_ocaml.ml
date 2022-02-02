@@ -99,7 +99,6 @@ let pp_scope (f : Format.formatter) ((ref, values) : scope) =
   Format.fprintf f "{ %d %s }" ref
     (Seq.fold_left (fun a b -> a ^ "; " ^ b) "" (StringSet.to_seq values))
 
-type interpreter_context = { on_statement : ast -> unit; print : bool }
 type identifier = Identifier of string [@@deriving show]
 
 type heap_value =
@@ -107,16 +106,24 @@ type heap_value =
   | ObjectTable of object_table
   | UnknownTable
   | Function of string list * ast list * scope list
-  | Builtin of (interpreter_context -> state -> any_value list -> state list)
+  | Builtin of int
 [@@deriving show]
 
-and state = {
+type state = {
   heap : heap_value list;
   scopes : scope list;
   return : any_value option option;
   break : bool;
 }
 [@@deriving show]
+
+type builtin = interpreter_context -> state -> any_value list -> state list
+
+and interpreter_context = {
+  on_statement : ast -> unit;
+  print : bool;
+  builtins : builtin array;
+}
 
 let resolve_scope (name : string) (scopes : scope list) : int option =
   scopes
@@ -664,7 +671,9 @@ and interpret_call (ctx : interpreter_context) (state : state)
         concat_fold_left
           (fun state ast -> interpret_statement ctx state ast)
           [ state ] body
-    | Builtin f -> f ctx state args
+    | Builtin i ->
+        let f = Array.get ctx.builtins i in
+        f ctx state args
     | _ -> failwith "callee is not a function"
   in
   List.map
@@ -749,16 +758,18 @@ let print_heap_short (heap : heap_value list) : unit =
     (fun i v -> Printf.printf "%d: %s\n" i (show_heap_value_short v))
     heap
 
-let interpret_program (state : state) (program : ast) : state list =
+let interpret_program (builtins : builtin array) (state : state) (program : ast)
+    : state list =
   let program =
     match program with
     | Slist program -> program
     | _ -> failwith "expected SList"
   in
-  let ctx = { on_statement = (fun _ -> ()); print = false } in
+  let ctx = { on_statement = (fun _ -> ()); print = false; builtins } in
   concat_fold_left (interpret_statement ctx) [ state ] program
 
-let debug_program (state : state) (program : ast) : state list =
+let debug_program (builtins : builtin array) (state : state) (program : ast) :
+    state list =
   let program =
     match program with
     | Slist program -> program
@@ -771,6 +782,7 @@ let debug_program (state : state) (program : ast) : state list =
           Lua_parser.Pp_lua.pp_lua stmt;
           print_endline "");
       print = true;
+      builtins;
     }
   in
   concat_fold_left (interpret_statement ctx) [ state ] program
@@ -968,7 +980,32 @@ let builtin_sincos sincos _ state args =
 
 let builtin_dead _ state args = [ state ]
 
-let initial_state =
+let builtins, initial_state =
+  let builtins =
+    [
+      ("print", builtin_print);
+      ("add", builtin_add);
+      ("rnd", builtin_rnd);
+      ("flr", builtin_flr);
+      ("foreach", builtin_foreach);
+      ("mget", builtin_mget);
+      ("fget", builtin_fget);
+      ("min", builtin_minmax min);
+      ("max", builtin_minmax max);
+      ("abs", builtin_abs);
+      ("count", builtin_count);
+      ("btn", builtin_btn);
+      ("sin", builtin_sincos sin);
+      ("cos", builtin_sincos cos);
+      ("music", builtin_dead);
+      ("sfx", builtin_dead);
+      ("pal", builtin_dead);
+      ("rectfill", builtin_dead);
+      ("circfill", builtin_dead);
+      ("map", builtin_dead);
+      ("spr", builtin_dead);
+    ]
+  in
   let state =
     {
       heap = [ ObjectTable StringMap.empty ];
@@ -978,44 +1015,24 @@ let initial_state =
     }
   in
   let state =
-    List.fold_left
-      (fun state (name, f) ->
-        let state, ref = allocate (Builtin f) state in
-        let state = set_by_scope name ref state in
-        state)
-      state
-      [
-        ("print", builtin_print);
-        ("add", builtin_add);
-        ("rnd", builtin_rnd);
-        ("flr", builtin_flr);
-        ("foreach", builtin_foreach);
-        ("mget", builtin_mget);
-        ("fget", builtin_fget);
-        ("min", builtin_minmax min);
-        ("max", builtin_minmax max);
-        ("abs", builtin_abs);
-        ("count", builtin_count);
-        ("btn", builtin_btn);
-        ("sin", builtin_sincos sin);
-        ("cos", builtin_sincos cos);
-        ("music", builtin_dead);
-        ("sfx", builtin_dead);
-        ("pal", builtin_dead);
-        ("rectfill", builtin_dead);
-        ("circfill", builtin_dead);
-        ("map", builtin_dead);
-        ("spr", builtin_dead);
-      ]
+    builtins
+    |> List.mapi (fun i (name, _) -> (name, i))
+    |> List.fold_left
+         (fun state (name, f) ->
+           let state, ref = allocate (Builtin f) state in
+           let state = set_by_scope name ref state in
+           state)
+         state
   in
-  state
+  (builtins |> List.map (fun (_, f) -> f) |> Array.of_list, state)
 
 let () =
   let state = initial_state in
-  let state = only @@ interpret_program state example_program in
+  let state = only @@ interpret_program builtins state example_program in
   let state = gc_state state in
   let state =
-    "_init()" |> Lua_parser.Parse.parse_from_string |> interpret_program state
+    "_init()" |> Lua_parser.Parse.parse_from_string
+    |> interpret_program builtins state
     |> only
   in
   let old_heap_size = List.length state.heap in
@@ -1028,6 +1045,7 @@ let () =
       List.fold_left
         (fun states stmt_str ->
           print_endline stmt_str;
+          flush_all ();
           let interpret =
             stmt_str |> Lua_parser.Parse.parse_from_string |> fun ast state ->
             interpret_or_debug_program state ast
@@ -1036,20 +1054,26 @@ let () =
         states stmt_strs
     in
     print_endline "before gc";
+    flush_all ();
     let states = List.map gc_state states in
     Printf.printf "states with duplicates: %d\n" (List.length states);
-    let tbl = Hashtbl.create (List.length states) in
-    states |> List.to_seq
-    |> Seq.map (fun s -> (s, ()))
-    |> Hashtbl.replace_seq tbl;
+    flush_all ();
+    let tbl =
+      states |> List.to_seq |> Seq.map (fun s -> (s, ())) |> Hashtbl.of_seq
+    in
+    let stats = Hashtbl.stats tbl in
+    Printf.printf
+      "DEBUG stats num_bindings: %d, num_buckets: %d, max_bucket_length: %d\n"
+      stats.num_bindings stats.num_buckets stats.max_bucket_length;
     let states = tbl |> Hashtbl.to_seq_keys |> List.of_seq in
     Printf.printf "states without duplicates: %d\n" (List.length states);
+    flush_all ();
     states
   in
   let states =
-    List.init 89 (fun i ->
+    List.init 91 (fun i ->
         [ Printf.sprintf "print(%d)" i; "_update()"; "_draw()" ])
-    |> List.fold_left (interpret_multi interpret_program) [ state ]
+    |> List.fold_left (interpret_multi @@ interpret_program builtins) [ state ]
   in
   (* let states = interpret_multi debug_program states [ "_update()" ] in
      let states = interpret_multi debug_program states [ "_draw()" ] in *)
