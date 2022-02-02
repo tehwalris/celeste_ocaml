@@ -23,7 +23,7 @@ let pp_pico_number (f : Format.formatter) (n : pico_number) =
     (fraction_int_of_pico_number n)
 
 let pico_number_of_ints (whole_n : int) (fraction_n : int) : pico_number =
-  assert (whole_n >= -32768 && fraction_n < 32768);
+  assert (whole_n >= -32768 && whole_n < 32768);
   assert (fraction_n >= 0 && fraction_n < 65536);
   let pico_n =
     Int32.logor
@@ -40,7 +40,7 @@ let rec pico_number_of_float (n : float) : pico_number =
   if n < 0. then Int32.neg @@ pico_number_of_float (-.n)
   else
     pico_number_of_ints (int_of_float n)
-      (int_of_float ((n -. floor n) *. 32767.))
+      (int_of_float ((n -. floor n) *. 65536.))
 
 let pico_number_of_string n = n |> float_of_string |> pico_number_of_float
 
