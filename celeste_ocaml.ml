@@ -101,23 +101,6 @@ let pp_scope (f : Format.formatter) ((ref, values) : scope) =
 type interpreter_context = { on_statement : ast -> unit }
 type identifier = Identifier of string [@@deriving show]
 
-type expression =
-  | ExpressionNumber of pico_number
-  | ExpressionBoolean of bool
-  | ExpressionTable of (identifier * expression) list
-  | ExpressionFunction of statement list
-  | ExpressionIdentifier of identifier
-  | ExpressionCall of expression * expression list
-[@@deriving show]
-
-and statement =
-  | StatmentAssignment of identifier * expression
-  | StatementLocal of identifier * expression option
-  | StatementFunction of identifier * statement list
-  | StatementCall of expression * expression list
-  | StatementReturn of expression option
-[@@deriving show] [@@deriving show]
-
 type heap_value =
   | ArrayTable of array_table
   | ObjectTable of object_table
@@ -133,8 +116,6 @@ and state = {
   break : bool;
 }
 [@@deriving show]
-
-type program = statement list [@@deriving show]
 
 let resolve_scope (name : string) (scopes : scope list) : int option =
   scopes
