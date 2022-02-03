@@ -161,6 +161,86 @@ let map_ith i cb l =
   assert (i >= 0 && i < List.length l);
   List.mapi (fun j v -> if i = j then cb v else v) l
 
+type heap = {
+  old_r_values : heap_value array;
+  old_rw_values : heap_value array;
+  old_indices : (bool * int) array;
+  young_values : (int * heap_value) list;
+  size : int;
+}
+
+let heap_get (heap : heap) (i : int) : heap_value =
+  assert (i >= 0 && i < heap.size);
+  let old_count = Array.length heap.old_indices in
+  if i < old_count then
+    match Array.get heap.old_indices i with
+    | false, j -> Array.get heap.old_r_values j
+    | true, j -> Array.get heap.old_rw_values j
+  else heap.young_values |> List.find (fun (j, v) -> i = j) |> fun (_, v) -> v
+
+let heap_map (heap : heap) (i : int) f : heap =
+  assert (i >= 0 && i < heap.size);
+  let old_count = Array.length heap.old_indices in
+  if i < old_count then (
+    match Array.get heap.old_indices i with
+    | false, j -> failwith "write to read-only part of heap"
+    | true, j ->
+        let values = Array.copy heap.old_rw_values in
+        Array.set values i (f @@ Array.get values i);
+        { heap with old_rw_values = values })
+  else
+    { heap with young_values = (i, f @@ heap_get heap i) :: heap.young_values }
+
+let heap_set (heap : heap) (i : int) v : heap = heap_map heap i (fun _ -> v)
+
+let heap_allocate (heap : heap) v : heap * int =
+  let i = heap.size in
+  ( {
+      heap with
+      size = heap.size + 1;
+      young_values = (i, v) :: heap.young_values;
+    },
+    i )
+
+let heap_of_seq (values : heap_value Seq.t) : heap =
+  let temp =
+    values
+    |> Seq.map (fun v ->
+           match v with
+           | ArrayTable _ | ObjectTable _ | UnknownTable -> (None, Some v)
+           | Function _ | Builtin _ -> (Some v, None))
+    |> Array.of_seq
+  in
+  {
+    old_r_values = temp |> BatArray.filter_map (fun (v, _) -> v);
+    old_rw_values = temp |> BatArray.filter_map (fun (_, v) -> v);
+    old_indices =
+      ( temp
+      |> BatArray.fold_left_map
+           (fun (r_i, rw_i) v ->
+             match v with
+             | Some v, None -> ((r_i + 1, rw_i), (false, r_i))
+             | None, Some v -> ((r_i, rw_i + 1), (true, rw_i))
+             | _ -> failwith "unreachable")
+           (0, 0)
+      |> fun (_, v) -> v );
+    young_values = [];
+    size = Array.length temp;
+  }
+
+let array_of_heap heap =
+  let values = Array.make heap.size None in
+  heap.old_indices
+  |> Array.iteri (fun i (rw, j) ->
+         let v =
+           Array.get (if rw then heap.old_rw_values else heap.old_r_values) j
+         in
+         Array.set values i (Some v));
+  heap.young_values
+  |> List.iter (fun (i, v) ->
+         if Array.get values i = None then Array.set values i (Some v));
+  Array.map Option.get values
+
 let get_by_scope (name : string) (state : state) : int * string * any_value =
   let ref = Option.value (resolve_scope name state.scopes) ~default:0 in
   let value =
@@ -1344,12 +1424,10 @@ let () =
           states
       else states
     in
-    if should_clear then
-      List.iter (fun state -> state |> show_state |> print_endline) states;
     states
   in
   let states =
-    List.init 111 (fun i ->
+    List.init 110 (fun i ->
         [ Printf.sprintf "print(%d)" i; "_update()"; "_draw()" ])
     |> List.fold_left (interpret_multi @@ interpret_program base_ctx) [ state ]
   in
@@ -1357,4 +1435,9 @@ let () =
        interpret_multi (debug_program base_ctx) states [ "_update()" ]
      in
      let states = interpret_multi (debug_program base_ctx) states [ "_draw()" ] in *)
-  ignore states
+  let largest_state =
+    BatList.max
+      ~cmp:(fun a b -> Int.compare (List.length a.heap) (List.length b.heap))
+      states
+  in
+  print_heap_short largest_state.heap
