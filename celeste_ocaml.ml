@@ -464,6 +464,12 @@ and interpret_binop_not_short (state : state) (op : string) (left : any_value)
       Abstract AbstractUnknownNumber
   | "-", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
       Concrete (ConcreteNumber (Int32.sub left right))
+  | ( "-",
+      Abstract (AbstractNumberRange (left_min, left_max)),
+      Abstract (AbstractNumberRange (right_min, right_max)) ) ->
+      Abstract
+        (AbstractNumberRange
+           (Int32.sub left_min right_max, Int32.sub left_max right_min))
   | "-", Abstract AbstractUnknownNumber, _
   | "-", _, Abstract AbstractUnknownNumber ->
       Abstract AbstractUnknownNumber
@@ -912,6 +918,31 @@ let builtin_add _ state args =
   in
   [ { state with heap = map_ith target_ref update_table state.heap } ]
 
+let builtin_del _ state args =
+  let args = List.map (fun (_, v) -> v) args in
+  let target_ref, value =
+    match args with
+    | [ Concrete (ConcreteReference target_ref); value ] -> (target_ref, value)
+    | _ -> failwith "bad arguments to del"
+  in
+  let update_table = function
+    | ArrayTable values ->
+        ArrayTable
+          (values
+          |> List.map (fun v -> (v = value, v))
+          |> List.fold_left_map
+               (fun matched_before (matched_now, v) ->
+                 ( matched_now || matched_before,
+                   (matched_now && not matched_before, v) ))
+               false
+          |> (fun (_, matches) -> matches)
+          |> List.filter (fun (should_remove, _) -> not should_remove)
+          |> List.map (fun (_, v) -> v))
+    | UnknownTable -> ArrayTable []
+    | _ -> failwith "expected ArrayTable or UnknownTable"
+  in
+  [ { state with heap = map_ith target_ref update_table state.heap } ]
+
 let builtin_rnd _ state args =
   let args = List.map (fun (_, v) -> v) args in
   let max =
@@ -1090,6 +1121,7 @@ let base_ctx, initial_state =
       ("print", builtin_print false);
       ("always_print", builtin_print true);
       ("add", builtin_add);
+      ("del", builtin_del);
       ("rnd", builtin_rnd);
       ("flr", builtin_flr);
       ("foreach", builtin_foreach);
@@ -1301,7 +1333,7 @@ let () =
     states
   in
   let states =
-    List.init 200 (fun i ->
+    List.init 107 (fun i ->
         [ Printf.sprintf "print(%d)" i; "_update()"; "_draw()" ])
     |> List.fold_left (interpret_multi @@ interpret_program base_ctx) [ state ]
   in
