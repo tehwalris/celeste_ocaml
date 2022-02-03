@@ -71,7 +71,8 @@ type concrete_value =
 type abstract_value =
   | AbstractOneOf of concrete_value list
   | AbstractNumberRange of pico_number * pico_number
-  | AbstractString
+  | AbstractUnknownNumber
+  | AbstractUnknownString
 [@@deriving show, ord]
 
 type any_value = Concrete of concrete_value | Abstract of abstract_value
@@ -233,7 +234,7 @@ let rec bools_of_any_value (v : any_value) : (bool * any_value) list =
   | Abstract (AbstractNumberRange _) -> [ (true, v) ]
   | Abstract (AbstractOneOf options) ->
       List.concat_map (fun o -> bools_of_any_value (Concrete o)) options
-  | Abstract AbstractString -> [ (true, v) ]
+  | Abstract AbstractUnknownString -> [ (true, v) ]
   | _ ->
       failwith
         "bools_from_any_value called on a value which could not be converted \
@@ -457,8 +458,15 @@ and interpret_binop_not_short (state : state) (op : string) (left : any_value)
       Abstract
         (AbstractNumberRange
            (Int32.add left_min right_min, Int32.add left_max right_max))
+  | "+", Abstract _, Concrete _ -> interpret_binop_not_short state op right left
+  | "+", Abstract AbstractUnknownNumber, _
+  | "+", _, Abstract AbstractUnknownNumber ->
+      Abstract AbstractUnknownNumber
   | "-", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
       Concrete (ConcreteNumber (Int32.sub left right))
+  | "-", Abstract AbstractUnknownNumber, _
+  | "-", _, Abstract AbstractUnknownNumber ->
+      Abstract AbstractUnknownNumber
   | "/", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
       Concrete (ConcreteNumber (pico_number_div left right))
   | ( "/",
@@ -468,14 +476,23 @@ and interpret_binop_not_short (state : state) (op : string) (left : any_value)
       Abstract
         (AbstractNumberRange
            (pico_number_div left_min right, pico_number_div left_max right))
+  | "/", Abstract AbstractUnknownNumber, _
+  | "/", _, Abstract AbstractUnknownNumber ->
+      Abstract AbstractUnknownNumber
   | "*", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
       Concrete (ConcreteNumber (pico_number_mul left right))
+  | "*", Abstract AbstractUnknownNumber, _
+  | "*", _, Abstract AbstractUnknownNumber ->
+      Abstract AbstractUnknownNumber
   | "%", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
       let left = int_of_pico_number left in
       assert (left >= 0);
       let right = int_of_pico_number right in
       assert (right > 0);
       Concrete (ConcreteNumber (pico_number_of_int (left mod right)))
+  | "%", Abstract AbstractUnknownNumber, _
+  | "%", _, Abstract AbstractUnknownNumber ->
+      Abstract AbstractUnknownNumber
   | "==", Concrete left, Concrete right ->
       Concrete (ConcreteBoolean (equal_concrete_value left right))
   | "~=", Concrete left, Concrete right ->
@@ -502,7 +519,7 @@ and interpret_binop_not_short (state : state) (op : string) (left : any_value)
       compare_range
         (number_range_of_any_value left)
         (number_range_of_any_value right)
-  | "..", _, _ -> Abstract AbstractString
+  | "..", _, _ -> Abstract AbstractUnknownString
   | _ ->
       failwith
         (Printf.sprintf "unsupported op: %s %s %s" (show_any_value left) op
@@ -783,7 +800,8 @@ and map_references_abstract_value f v : abstract_value =
   | AbstractOneOf values ->
       AbstractOneOf (List.map (map_references_concrete_value f) values)
   | AbstractNumberRange _ -> v
-  | AbstractString -> v
+  | AbstractUnknownNumber -> v
+  | AbstractUnknownString -> v
 
 and map_references_any_value f v : any_value =
   match v with
@@ -1093,6 +1111,7 @@ let base_ctx, initial_state =
       ("circfill", builtin_dead);
       ("map", builtin_dead);
       ("spr", builtin_dead);
+      ("camera", builtin_dead);
     ]
   in
   let state =
@@ -1153,7 +1172,17 @@ let state_of_player_spawn object_table =
   |> number_range_of_any_value |> single_number_of_range |> int_of_pico_number
 
 let abstract_state_mappers =
-  [ ("hair_pos", fun v -> v) ] |> List.to_seq |> StringMap.of_seq
+  [
+    ( "hair_pos",
+      fun v ->
+        match v with
+        | Concrete (ConcreteNumber _)
+        | Abstract (AbstractNumberRange _)
+        | Abstract AbstractUnknownNumber ->
+            Abstract AbstractUnknownNumber
+        | _ -> failwith "not a number" );
+  ]
+  |> List.to_seq |> StringMap.of_seq
 
 let abstract_state (state : state) : state =
   let inspector_state =
@@ -1272,10 +1301,12 @@ let () =
     states
   in
   let states =
-    List.init 91 (fun i ->
+    List.init 200 (fun i ->
         [ Printf.sprintf "print(%d)" i; "_update()"; "_draw()" ])
     |> List.fold_left (interpret_multi @@ interpret_program base_ctx) [ state ]
   in
-  (* let states = interpret_multi debug_program states [ "_update()" ] in
-     let states = interpret_multi debug_program states [ "_draw()" ] in *)
+  let states =
+    interpret_multi (debug_program base_ctx) states [ "_update()" ]
+  in
+  let states = interpret_multi (debug_program base_ctx) states [ "_draw()" ] in
   ignore states
