@@ -206,6 +206,12 @@ type state = {
 }
 [@@deriving show, ord]
 
+module StateSet = Set.Make (struct
+  type t = state
+
+  let compare = compare_state
+end)
+
 type ast_numberer = (ast, int) Hashtbl.t * (int, ast) Hashtbl.t
 
 let number_ast (tbl, rev_tbl) ast =
@@ -296,6 +302,16 @@ let concat_fold_left_map (f : 'a -> 'b -> ('a * 'c) list) (init : 'a list)
                        (acc, map_value :: old_map_values))))
        (List.map (fun init -> (init, [])) init)
   |> List.map (fun (acc, map_values) -> (acc, List.rev map_values))
+
+let concat_map_sort_uniq_states (f : state -> state list)
+    (old_states : state list) : state list =
+  let new_states =
+    List.fold_left
+      (fun new_states state ->
+        StateSet.add_seq (List.to_seq @@ f state) new_states)
+      StateSet.empty old_states
+  in
+  StateSet.elements new_states
 
 let only xs =
   match xs with
@@ -1376,33 +1392,20 @@ let () =
   Printf.printf "heap size after gc: %d\n" state.heap.size;
   (* TODO remove later - this clearing is only for debugging*)
   let did_clear = ref false in
-  let interpret_multi interpret_or_debug_program states stmt_strs =
-    let states =
-      List.fold_left
-        (fun states stmt_str ->
-          print_endline stmt_str;
-          flush_all ();
-          let interpret =
-            stmt_str |> Lua_parser.Parse.parse_from_string |> fun ast state ->
-            interpret_or_debug_program state ast
-          in
-          states |> List.concat_map interpret)
-        states stmt_strs
+  let interpret_multi interpret_or_debug_program states stmt_str =
+    print_endline stmt_str;
+    flush_all ();
+    let interpret =
+      stmt_str |> Lua_parser.Parse.parse_from_string |> fun ast state ->
+      interpret_or_debug_program state ast
+      |> List.map (fun state -> state |> gc_state |> abstract_state)
     in
+    let states = concat_map_sort_uniq_states interpret states in
+    Printf.printf "states: %d\n" (List.length states);
     let largest_state =
       BatList.max ~cmp:(fun a b -> Int.compare a.heap.size b.heap.size) states
     in
-    Printf.printf "largest state before gc: %d\n" largest_state.heap.size;
-    flush_all ();
-    let states = List.map gc_state states in
-    Printf.printf "largest state after gc: %d\n"
-      (gc_state largest_state).heap.size;
-    flush_all ();
-    Printf.printf "states with duplicates: %d\n" (List.length states);
-    flush_all ();
-    let states = List.map abstract_state states in
-    let states = List.sort_uniq compare_state states in
-    Printf.printf "states without duplicates: %d\n" (List.length states);
+    Printf.printf "largest state: %d\n" largest_state.heap.size;
     flush_all ();
     print_states_summary states;
     let should_clear =
@@ -1426,8 +1429,9 @@ let () =
     states
   in
   let states =
-    List.init 110 (fun i ->
+    List.init 500 (fun i ->
         [ Printf.sprintf "print(%d)" i; "_update()"; "_draw()" ])
+    |> List.flatten
     |> List.fold_left (interpret_multi @@ interpret_program base_ctx) [ state ]
   in
   (* let states =
