@@ -308,7 +308,9 @@ let concat_map_sort_uniq_states (f : state -> state list)
   let new_states =
     List.fold_left
       (fun new_states state ->
-        StateSet.add_seq (List.to_seq @@ f state) new_states)
+        StateSet.add_seq
+          (f state |> List.sort_uniq compare_state |> List.to_seq)
+          new_states)
       StateSet.empty old_states
   in
   StateSet.elements new_states
@@ -1427,7 +1429,7 @@ let () =
     states
   in
   let states =
-    List.init 111 (fun i -> i)
+    List.init 112 (fun i -> i)
     |> List.fold_left
          (fun states i ->
            Printf.printf "frame %d\n" i;
