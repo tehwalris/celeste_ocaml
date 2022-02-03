@@ -1125,6 +1125,8 @@ let () =
   print_heap_short state.heap;
   Printf.printf "heap size before gc: %d\n" old_heap_size;
   Printf.printf "heap size after gc: %d\n" (List.length state.heap);
+  (* TODO remove later - this clearing is only for debugging*)
+  let did_clear = ref false in
   let interpret_multi interpret_or_debug_program states stmt_strs =
     let states =
       List.fold_left
@@ -1147,6 +1149,26 @@ let () =
     Printf.printf "states without duplicates: %d\n" (List.length states);
     flush_all ();
     print_states_summary states;
+    let should_clear =
+      (not !did_clear)
+      && states
+         |> BatList.filter_map state_find_player_spawn
+         |> List.map state_of_player_spawn
+         |> List.mem 1
+    in
+    did_clear := !did_clear || should_clear;
+    let states =
+      if should_clear then
+        List.filter
+          (fun state ->
+            state |> state_find_player_spawn
+            |> Option.map state_of_player_spawn
+            = Some 1)
+          states
+      else states
+    in
+    if should_clear then
+      List.iter (fun state -> state |> show_state |> print_endline) states;
     states
   in
   let states =
