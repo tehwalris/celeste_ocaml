@@ -59,6 +59,26 @@ function find_player_spawn()
   return find_object(function(o) return o.type == player_spawn end)
 end
 
+function foreach_hair(cb)
+  foreach(
+    objects,
+    function(o)
+      if o.type == player or o.type == player_spawn then
+        foreach(o.hair, cb)
+      end
+    end
+  )
+end
+
+function mark_hair(o)
+  mark("hair_pos", o.x)
+  mark("hair_pos", o.y)
+end
+
+function mark_everything()
+  foreach_hair(mark_hair)
+end
+
 function inspect_celeste()
   always_print("count(objects)", count(objects))
 end

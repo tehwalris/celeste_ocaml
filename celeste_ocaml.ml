@@ -80,6 +80,13 @@ type any_value = Concrete of concrete_value | Abstract of abstract_value
 type lhs_value =
   | ArrayTableElement of int * int
   | ObjectTableElement of int * string
+[@@deriving show, ord]
+
+module LhsValueMap = Map.Make (struct
+  type t = lhs_value
+
+  let compare = compare_lhs_value
+end)
 
 type array_table = any_value list [@@deriving show, ord]
 type object_table = any_value StringMap.t [@@deriving ord]
@@ -130,10 +137,15 @@ let number_ast (tbl, rev_tbl) ast =
 
 let get_numbered_ast (_, rev_tbl) i = Hashtbl.find rev_tbl i
 
-type builtin = interpreter_context -> state -> any_value list -> state list
+type builtin =
+  interpreter_context ->
+  state ->
+  (lhs_value option * any_value) list ->
+  state list
 
 and interpreter_context = {
   on_statement : ast -> unit;
+  on_mark : string * lhs_value -> unit;
   print : bool;
   builtins : builtin array;
   ast_numberer : ast_numberer;
@@ -273,7 +285,12 @@ let rec interpret_expression (ctx : interpreter_context) (state : state)
   | Bool "true" -> [ (state, None, Concrete (ConcreteBoolean true)) ]
   | Bool "false" -> [ (state, None, Concrete (ConcreteBoolean false)) ]
   | Bool "nil" -> [ (state, None, Concrete ConcreteNil) ]
-  | String s -> [ (state, None, Concrete (ConcreteString s)) ]
+  | String s ->
+      assert (String.starts_with ~prefix:"\"" s);
+      assert (String.ends_with ~suffix:"\"" s);
+      let s = String.sub s 1 (String.length s - 2) in
+      assert (not (String.contains s '"'));
+      [ (state, None, Concrete (ConcreteString s)) ]
   | Ident name ->
       let lhs_ref, lhs_name, value = get_by_scope name state in
       [ (state, Some (ObjectTableElement (lhs_ref, lhs_name)), value) ]
@@ -324,7 +341,11 @@ let rec interpret_expression (ctx : interpreter_context) (state : state)
       in
       let state, arg_values =
         List.fold_left_map
-          (fun state expr -> only @@ interpret_rhs_expression ctx state expr)
+          (fun state expr ->
+            let state, lhs_value, value =
+              only @@ interpret_expression ctx state expr
+            in
+            (state, (lhs_value, value)))
           state arg_exprs
       in
       interpret_call ctx state callee_value arg_values
@@ -549,7 +570,11 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
       in
       let state, arg_values =
         List.fold_left_map
-          (fun state expr -> only @@ interpret_rhs_expression ctx state expr)
+          (fun state expr ->
+            let state, lhs_value, value =
+              only @@ interpret_expression ctx state expr
+            in
+            (state, (lhs_value, value)))
           state arg_exprs
       in
       interpret_call ctx state callee_value arg_values
@@ -660,7 +685,7 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
       failwith "unsupported statement"
 
 and interpret_call (ctx : interpreter_context) (state : state)
-    (callee : any_value) (args : any_value list) :
+    (callee : any_value) (args : (lhs_value option * any_value) list) :
     (state * any_value option) list =
   assert (not (is_skipping state));
   let ref =
@@ -674,7 +699,7 @@ and interpret_call (ctx : interpreter_context) (state : state)
     match List.nth state.heap ref with
     | Function (params, body_i, scopes) ->
         let args =
-          pad_or_drop (Concrete ConcreteNil) (List.length params) args
+          pad_or_drop (None, Concrete ConcreteNil) (List.length params) args
         in
         let state =
           {
@@ -684,7 +709,7 @@ and interpret_call (ctx : interpreter_context) (state : state)
         in
         let state =
           List.fold_left2
-            (fun state name value -> set_by_scope name value state)
+            (fun state name (_, value) -> set_by_scope name value state)
             state params args
         in
         let body =
@@ -847,10 +872,16 @@ let return_from_builtin (value : any_value) (state : state) : state =
 
 let builtin_print always_print ctx state args =
   if always_print || ctx.print then
-    List.iter (fun v -> print_endline (show_any_value v)) args;
+    List.iter
+      (fun (lhs_value, value) ->
+        Printf.printf "(%s, %s)\n"
+          ([%derive.show: lhs_value option] lhs_value)
+          (show_any_value value))
+      args;
   [ state ]
 
 let builtin_add _ state args =
+  let args = List.map (fun (_, v) -> v) args in
   let target_ref, value =
     match args with
     | [ Concrete (ConcreteReference target_ref); value ] -> (target_ref, value)
@@ -864,6 +895,7 @@ let builtin_add _ state args =
   [ { state with heap = map_ith target_ref update_table state.heap } ]
 
 let builtin_rnd _ state args =
+  let args = List.map (fun (_, v) -> v) args in
   let max =
     match args with
     | [ Concrete (ConcreteNumber max) ] -> max
@@ -877,6 +909,7 @@ let builtin_rnd _ state args =
   ]
 
 let builtin_flr _ state args =
+  let args = List.map (fun (_, v) -> v) args in
   let flr_pico (n : pico_number) : pico_number =
     pico_number_of_ints (whole_int_of_pico_number n) 0
   in
@@ -890,6 +923,7 @@ let builtin_flr _ state args =
   [ return_from_builtin result state ]
 
 let builtin_foreach ctx state args =
+  let args = List.map (fun (_, v) -> v) args in
   let table_ref, cb =
     match args with
     | [ Concrete (ConcreteReference target_ref); cb ] -> (target_ref, cb)
@@ -901,12 +935,16 @@ let builtin_foreach ctx state args =
     | UnknownTable -> []
     | _ -> failwith "expected ArrayTable or UnknownTable"
   in
-  let call_iteration state value =
-    interpret_call ctx state cb [ value ] |> List.map (fun (state, _) -> state)
+  let call_iteration state (i, value) =
+    interpret_call ctx state cb
+      [ (Some (ArrayTableElement (table_ref, i)), value) ]
+    |> List.map (fun (state, _) -> state)
   in
-  concat_fold_left call_iteration [ state ] values
+  concat_fold_left call_iteration [ state ]
+    (List.mapi (fun i v -> (i, v)) values)
 
 let builtin_mget _ state args =
+  let args = List.map (fun (_, v) -> v) args in
   let x, y =
     match args with
     | [ Concrete (ConcreteNumber x); Concrete (ConcreteNumber y) ] -> (x, y)
@@ -922,6 +960,7 @@ let builtin_mget _ state args =
   ]
 
 let builtin_fget _ state args =
+  let args = List.map (fun (_, v) -> v) args in
   let i, b =
     match args with
     | [ Concrete (ConcreteNumber i); Concrete (ConcreteNumber b) ] -> (i, b)
@@ -938,6 +977,7 @@ let builtin_fget _ state args =
   ]
 
 let builtin_minmax minmax _ state args =
+  let args = List.map (fun (_, v) -> v) args in
   let (a_min, a_max), (b_min, b_max) =
     match args with
     | [ a; b ] -> (number_range_of_any_value a, number_range_of_any_value b)
@@ -950,6 +990,7 @@ let builtin_minmax minmax _ state args =
   ]
 
 let builtin_abs _ state args =
+  let args = List.map (fun (_, v) -> v) args in
   let abs_pico (n : pico_number) : pico_number = Int32.abs n in
   let result =
     match args with
@@ -959,6 +1000,7 @@ let builtin_abs _ state args =
   [ return_from_builtin result state ]
 
 let builtin_count ctx state args =
+  let args = List.map (fun (_, v) -> v) args in
   let table_ref =
     match args with
     | [ Concrete (ConcreteReference target_ref) ] -> target_ref
@@ -977,6 +1019,7 @@ let builtin_count ctx state args =
   ]
 
 let builtin_btn ctx state args =
+  let args = List.map (fun (_, v) -> v) args in
   let i =
     match args with
     | [ Concrete (ConcreteNumber n) ] -> int_of_pico_number n
@@ -990,6 +1033,7 @@ let builtin_btn ctx state args =
   ]
 
 let builtin_sincos sincos _ state args =
+  let args = List.map (fun (_, v) -> v) args in
   let sincos_pico a =
     a |> float_of_pico_number
     |> (fun a -> sincos (1. -. a) *. 2. *. Float.pi)
@@ -1007,13 +1051,23 @@ let builtin_sincos sincos _ state args =
   [ return_from_builtin result state ]
 
 let builtin_error ctx state args =
+  let args = List.map (fun (_, v) -> v) args in
   List.iter (fun v -> print_endline (show_any_value v)) args;
   failwith "error function called from lua"
+
+let builtin_mark ctx state args =
+  let s, lhs_value =
+    match args with
+    | [ (_, Concrete (ConcreteString s)); (Some lhs_value, _) ] -> (s, lhs_value)
+    | _ -> failwith "bad arguments to mark"
+  in
+  ctx.on_mark (s, lhs_value);
+  [ state ]
 
 let builtin_dead _ state args = [ state ]
 
 let base_ctx, initial_state =
-  let builtins =
+  let builtins : (string * builtin) list =
     [
       ("print", builtin_print false);
       ("always_print", builtin_print true);
@@ -1032,6 +1086,7 @@ let base_ctx, initial_state =
       ("cos", builtin_sincos cos);
       ("error", builtin_error);
       ("music", builtin_dead);
+      ("mark", builtin_mark);
       ("sfx", builtin_dead);
       ("pal", builtin_dead);
       ("rectfill", builtin_dead);
@@ -1061,6 +1116,7 @@ let base_ctx, initial_state =
   let ctx : interpreter_context =
     {
       on_statement = (fun _ -> ());
+      on_mark = (fun _ -> ());
       print = false;
       builtins = builtins |> List.map (fun (_, f) -> f) |> Array.of_list;
       ast_numberer = (Hashtbl.create 100, Hashtbl.create 100);
@@ -1095,6 +1151,49 @@ let state_find_player_spawn state : object_table option =
 let state_of_player_spawn object_table =
   StringMap.find "state" object_table
   |> number_range_of_any_value |> single_number_of_range |> int_of_pico_number
+
+let abstract_state_mappers =
+  [ ("hair_pos", fun v -> v) ] |> List.to_seq |> StringMap.of_seq
+
+let abstract_state (state : state) : state =
+  let inspector_state =
+    only @@ interpret_program base_ctx state inspector_program
+  in
+  let marks = ref [] in
+  ignore @@ only
+  @@ interpret_statement
+       { base_ctx with on_mark = (fun e -> marks := e :: !marks) }
+       inspector_state
+       (Clist [ Ident "mark_everything"; Args (Elist []) ]);
+  let marks = !marks in
+  let mappers_by_lhs =
+    marks |> List.to_seq
+    |> Seq.map (fun (s, lhs) -> (lhs, StringMap.find s abstract_state_mappers))
+    |> LhsValueMap.of_seq
+  in
+  let noop_mapper v = v in
+  let get_mapper lhs_value =
+    LhsValueMap.find_opt lhs_value mappers_by_lhs
+    |> Option.value ~default:noop_mapper
+  in
+  {
+    state with
+    heap =
+      state.heap
+      |> List.mapi (fun i heap_value ->
+             match heap_value with
+             | ArrayTable values ->
+                 ArrayTable
+                   (List.mapi
+                      (fun j v -> get_mapper (ArrayTableElement (i, j)) v)
+                      values)
+             | ObjectTable values ->
+                 ObjectTable
+                   (StringMap.mapi
+                      (fun k v -> get_mapper (ObjectTableElement (i, k)) v)
+                      values)
+             | _ -> heap_value);
+  }
 
 let print_states_summary states =
   let max_objects = states |> List.map state_count_objects |> BatList.max in
@@ -1145,6 +1244,7 @@ let () =
     let states = List.map gc_state states in
     Printf.printf "states with duplicates: %d\n" (List.length states);
     flush_all ();
+    let states = List.map abstract_state states in
     let states = List.sort_uniq compare_state states in
     Printf.printf "states without duplicates: %d\n" (List.length states);
     flush_all ();
