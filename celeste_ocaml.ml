@@ -413,7 +413,10 @@ and interpret_rhs_expression ctx state expr =
 and interpret_unop (state : state) (op : string) (v : any_value) : any_value =
   match (String.trim op, v) with
   | "-", Concrete (ConcreteNumber v) -> Concrete (ConcreteNumber (Int32.neg v))
-  | "not", Concrete (ConcreteBoolean b) -> Concrete (ConcreteBoolean (not b))
+  | "not", _ ->
+      v |> bools_of_any_value
+      |> List.map (fun (b, _) -> not b)
+      |> any_value_of_bools
   | _ -> failwith (Printf.sprintf "unsupported op: %s %s" op (show_any_value v))
 
 and interpret_binop_maybe_short (ctx : interpreter_context) (state : state)
@@ -491,11 +494,15 @@ and interpret_binop_not_short (state : state) (op : string) (left : any_value)
   | "*", _, Abstract AbstractUnknownNumber ->
       Abstract AbstractUnknownNumber
   | "%", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
-      let left = int_of_pico_number left in
-      assert (left >= 0);
+      let left_whole = whole_int_of_pico_number left in
+      assert (left_whole >= 0);
+      let left_fraction = fraction_int_of_pico_number left in
+      assert (left_fraction >= 0);
       let right = int_of_pico_number right in
       assert (right > 0);
-      Concrete (ConcreteNumber (pico_number_of_int (left mod right)))
+      Concrete
+        (ConcreteNumber
+           (pico_number_of_ints (left_whole mod right) left_fraction))
   | "%", Abstract AbstractUnknownNumber, _
   | "%", _, Abstract AbstractUnknownNumber ->
       Abstract AbstractUnknownNumber
@@ -1333,7 +1340,7 @@ let () =
     states
   in
   let states =
-    List.init 107 (fun i ->
+    List.init 108 (fun i ->
         [ Printf.sprintf "print(%d)" i; "_update()"; "_draw()" ])
     |> List.fold_left (interpret_multi @@ interpret_program base_ctx) [ state ]
   in
