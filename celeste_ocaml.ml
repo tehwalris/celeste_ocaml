@@ -1307,9 +1307,18 @@ let () =
           states |> List.concat_map interpret)
         states stmt_strs
     in
-    print_endline "before gc";
+    let largest_state =
+      BatList.max
+        ~cmp:(fun a b -> Int.compare (List.length a.heap) (List.length b.heap))
+        states
+    in
+    Printf.printf "largest state before gc: %d\n"
+      (List.length largest_state.heap);
     flush_all ();
     let states = List.map gc_state states in
+    Printf.printf "largest state after gc: %d\n"
+      (List.length (gc_state largest_state).heap);
+    flush_all ();
     Printf.printf "states with duplicates: %d\n" (List.length states);
     flush_all ();
     let states = List.map abstract_state states in
@@ -1340,12 +1349,12 @@ let () =
     states
   in
   let states =
-    List.init 108 (fun i ->
+    List.init 111 (fun i ->
         [ Printf.sprintf "print(%d)" i; "_update()"; "_draw()" ])
     |> List.fold_left (interpret_multi @@ interpret_program base_ctx) [ state ]
   in
-  let states =
-    interpret_multi (debug_program base_ctx) states [ "_update()" ]
-  in
-  let states = interpret_multi (debug_program base_ctx) states [ "_draw()" ] in
+  (* let states =
+       interpret_multi (debug_program base_ctx) states [ "_update()" ]
+     in
+     let states = interpret_multi (debug_program base_ctx) states [ "_draw()" ] in *)
   ignore states
