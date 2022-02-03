@@ -126,15 +126,6 @@ type heap = {
 }
 [@@deriving show, ord]
 
-let empty_heap =
-  {
-    old_r_values = Array.make 0 UnknownTable;
-    old_rw_values = Array.make 0 UnknownTable;
-    old_indices = Array.make 0 (false, 0);
-    young_values = [];
-    size = 0;
-  }
-
 let heap_get (heap : heap) (i : int) : heap_value =
   assert (i >= 0 && i < heap.size);
   let old_count = Array.length heap.old_indices in
