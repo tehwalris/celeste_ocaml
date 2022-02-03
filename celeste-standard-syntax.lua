@@ -1218,6 +1218,13 @@ function _update()
 			end
 		end
 	end
+
+	-- HACK TODO remove later (deletes smoke to avoid useless states)
+	foreach(objects,function(obj)
+		if obj.type == smoke then
+			del(objects, obj)
+		end
+	end)
 end
 
 -- drawing functions --
