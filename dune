@@ -1,14 +1,6 @@
 (executable
  (name celeste_ocaml)
- (libraries
-  bigarray
-  gmp
-  apron
-  apron.octD
-  lua_parser.lib
-  batteries
-  landmarks
-  parmap)
+ (libraries bigarray gmp apron apron.octD lua_parser.lib batteries landmarks)
  (preprocess
   (pps
    ppx_deriving.show

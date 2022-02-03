@@ -214,7 +214,7 @@ end)
 
 type ast_numberer = (ast, int) Hashtbl.t * (int, ast) Hashtbl.t
 
-let number_ast_rw (tbl, rev_tbl) ast =
+let number_ast (tbl, rev_tbl) ast =
   match Hashtbl.find_opt tbl ast with
   | Some i -> i
   | None ->
@@ -222,11 +222,6 @@ let number_ast_rw (tbl, rev_tbl) ast =
       Hashtbl.add tbl ast i;
       Hashtbl.add rev_tbl i ast;
       i
-
-let number_ast_ro (tbl, rev_tbl) ast =
-  match Hashtbl.find_opt tbl ast with
-  | Some i -> i
-  | None -> failwith "number_ast_ro called on new ast"
 
 let get_numbered_ast (_, rev_tbl) i = Hashtbl.find rev_tbl i
 
@@ -308,14 +303,17 @@ let concat_fold_left_map (f : 'a -> 'b -> ('a * 'c) list) (init : 'a list)
        (List.map (fun init -> (init, [])) init)
   |> List.map (fun (acc, map_values) -> (acc, List.rev map_values))
 
-let concat_map_sort_uniq_states f old_states =
-  Parmap.parfold ~chunksize:1000
-    (fun state new_states ->
-      StateSet.add_seq
-        (f state |> List.sort_uniq compare_state |> List.to_seq)
-        new_states)
-    (Parmap.L old_states) StateSet.empty StateSet.union
-  |> StateSet.elements
+let concat_map_sort_uniq_states (f : state -> state list)
+    (old_states : state list) : state list =
+  let new_states =
+    List.fold_left
+      (fun new_states state ->
+        StateSet.add_seq
+          (f state |> List.sort_uniq compare_state |> List.to_seq)
+          new_states)
+      StateSet.empty old_states
+  in
+  StateSet.elements new_states
 
 let only xs =
   match xs with
@@ -428,7 +426,7 @@ let rec interpret_expression (ctx : interpreter_context) (state : state)
       in
       let state, value =
         allocate
-          (Function (params, number_ast_ro ctx.ast_numberer body, state.scopes))
+          (Function (params, number_ast ctx.ast_numberer body, state.scopes))
           state
       in
       [ (state, None, value) ]
@@ -860,45 +858,6 @@ and interpret_call (ctx : interpreter_context) (state : state)
       ( { state with scopes = old_scopes; return = None },
         Option.value state.return ~default:None ))
     states
-
-let rec visit_ast f ast : unit =
-  f ast;
-  match ast with
-  | Break | Ellipsis | Ident _ | Number _ | Bool _ | String _ -> ()
-  | Args a
-  | Do a
-  | FunctionE a
-  | Goto a
-  | Key1 a
-  | Key2 a
-  | Label a
-  | Lnames a
-  | Pexp a
-  | Return a
-  | Table a
-  | Unop (_, a)
-  | Vargs a ->
-      visit_ast f a
-  | Assign (a, b)
-  | Binop (_, a, b)
-  | Elseif (a, b)
-  | Fassign (a, b)
-  | Fbody (a, b)
-  | Function (a, b)
-  | If1 (a, b)
-  | Lassign (a, b)
-  | Lfunction (a, b)
-  | Member (a, b)
-  | Repeat (a, b)
-  | While (a, b) ->
-      [ a; b ] |> List.iter (visit_ast f)
-  | Forin (a, b, c) | If2 (a, b, c) | If3 (a, b, c) | Mcall (a, b, c) ->
-      [ a; b; c ] |> List.iter (visit_ast f)
-  | For1 (a, b, c, d) | If4 (a, b, c, d) ->
-      [ a; b; c; d ] |> List.iter (visit_ast f)
-  | For2 (a, b, c, d, e) -> [ a; b; c; d; e ] |> List.iter (visit_ast f)
-  | Clist children | Elist children | FNlist children | Slist children ->
-      children |> List.iter (visit_ast f)
 
 let rec gc_heap heap : heap_value Seq.t =
   let new_refs_by_old_ref = Array.make heap.size None in
@@ -1418,16 +1377,6 @@ let print_states_summary states =
     (Option.value max_player_spawn_state ~default:(-1))
 
 let () =
-  (* HACK assign numbers to all function bodies in the main process*)
-  visit_ast
-    (function
-      | Fbody (Elist params, body) ->
-          ignore @@ number_ast_rw base_ctx.ast_numberer body
-      | _ -> ())
-    (Slist
-       ([ example_program; inspector_program ]
-       |> List.concat_map Lua_parser.Ast.extract_list));
-
   let state = initial_state in
   let state = only @@ interpret_program base_ctx state example_program in
   let state = gc_state state in
@@ -1480,7 +1429,7 @@ let () =
     states
   in
   let states =
-    List.init 500 (fun i -> i)
+    List.init 112 (fun i -> i)
     |> List.fold_left
          (fun states i ->
            Printf.printf "frame %d\n" i;
