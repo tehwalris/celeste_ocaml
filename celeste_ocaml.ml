@@ -857,11 +857,9 @@ and interpret_call (ctx : interpreter_context) (state : state)
         Option.value state.return ~default:None ))
     states
 
-let rec gc_state state : state =
-  assert (List.length state.scopes = 0);
-  assert (not (is_skipping state));
-  let new_refs_by_old_ref = Array.make state.heap.size None in
-  let heap_array = array_of_heap state.heap in
+let rec gc_heap heap : heap_value Seq.t =
+  let new_refs_by_old_ref = Array.make heap.size None in
+  let heap_array = array_of_heap heap in
   let old_refs = Stack.create () in
   let rec f_once (old_ref : int) : int =
     let new_ref, first_visit =
@@ -876,15 +874,15 @@ let rec gc_state state : state =
     new_ref
   in
   ignore @@ f_once 0;
-  {
-    state with
-    heap =
-      old_refs |> Stack.to_seq |> List.of_seq |> List.rev |> List.to_seq
-      |> BatSeq.mapi (fun new_ref old_ref ->
-             assert (old_ref = 0 = (new_ref = 0));
-             Array.get heap_array old_ref |> map_references_heap_value f_once)
-      |> heap_of_seq;
-  }
+  old_refs |> Stack.to_seq |> List.of_seq |> List.rev |> List.to_seq
+  |> BatSeq.mapi (fun new_ref old_ref ->
+         assert (old_ref = 0 = (new_ref = 0));
+         Array.get heap_array old_ref |> map_references_heap_value f_once)
+
+and gc_state state : state =
+  assert (List.length state.scopes = 0);
+  assert (not (is_skipping state));
+  { state with heap = gc_heap state.heap |> heap_of_seq }
 
 and map_references_heap_value f v : heap_value =
   match v with
@@ -1320,7 +1318,7 @@ let abstract_state_mappers =
   ]
   |> List.to_seq |> StringMap.of_seq
 
-let abstract_state (state : state) : state =
+let abstract_state (state : state) (heap_as_seq : heap_value Seq.t) : state =
   let inspector_state =
     only @@ interpret_program base_ctx state inspector_program
   in
@@ -1344,7 +1342,7 @@ let abstract_state (state : state) : state =
   {
     state with
     heap =
-      state.heap |> array_of_heap |> Array.to_seq
+      heap_as_seq
       |> BatSeq.mapi (fun i heap_value ->
              match heap_value with
              | ArrayTable values ->
@@ -1398,7 +1396,7 @@ let () =
     let interpret =
       stmt_str |> Lua_parser.Parse.parse_from_string |> fun ast state ->
       interpret_or_debug_program state ast
-      |> List.map (fun state -> state |> gc_state |> abstract_state)
+      |> List.map (fun state -> abstract_state state @@ gc_heap state.heap)
     in
     let states = concat_map_sort_uniq_states interpret states in
     Printf.printf "states: %d\n" (List.length states);
