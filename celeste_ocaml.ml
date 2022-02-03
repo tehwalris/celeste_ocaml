@@ -1429,10 +1429,15 @@ let () =
     states
   in
   let states =
-    List.init 500 (fun i ->
-        [ Printf.sprintf "print(%d)" i; "_update()"; "_draw()" ])
-    |> List.flatten
-    |> List.fold_left (interpret_multi @@ interpret_program base_ctx) [ state ]
+    List.init 111 (fun i -> i)
+    |> List.fold_left
+         (fun states i ->
+           Printf.printf "frame %d\n" i;
+           List.fold_left
+             (fun states stmt_str ->
+               interpret_multi (interpret_program base_ctx) states stmt_str)
+             states [ "_update()"; "_draw()" ])
+         [ state ]
   in
   (* let states =
        interpret_multi (debug_program base_ctx) states [ "_update()" ]
