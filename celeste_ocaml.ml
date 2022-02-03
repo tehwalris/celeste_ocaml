@@ -262,6 +262,9 @@ let rec any_value_of_number_range (v_min : pico_number) (v_max : pico_number) :
   if v_min == v_max then Concrete (ConcreteNumber v_min)
   else Abstract (AbstractNumberRange (v_min, v_max))
 
+let single_number_of_range (min, max) =
+  if min = max then min else failwith "range is not a single number"
+
 let rec interpret_expression (ctx : interpreter_context) (state : state)
     (expr : ast) : (state * lhs_value option * any_value) list =
   match expr with
@@ -769,10 +772,10 @@ let show_heap_value_short v =
   | ObjectTable values ->
       Printf.sprintf "ObjectTable (%d elements)" (StringMap.cardinal values)
   | UnknownTable -> "UnknownTable"
-  | Function (args, _, scopes) ->
-      Printf.sprintf "Function (%d args, %d scopes)" (List.length args)
-        (List.length scopes)
-  | Builtin _ -> "Builtin"
+  | Function (args, body_i, scopes) ->
+      Printf.sprintf "Function (%d args, %d body, %d scopes)" (List.length args)
+        body_i (List.length scopes)
+  | Builtin i -> Printf.sprintf "Builtin %d" i
 
 let print_heap_short (heap : heap_value list) : unit =
   List.iteri
@@ -819,9 +822,12 @@ let rec parse_hex_bytes (s : char list) : int list =
       v :: parse_hex_bytes tl
   | _ -> failwith "uneven number of bytes"
 
-let example_program =
-  BatFile.with_file_in "celeste-standard-syntax.lua" (fun f ->
+let load_program filename =
+  BatFile.with_file_in filename (fun f ->
       f |> Batteries.IO.to_input_channel |> Lua_parser.Parse.parse_from_chan)
+
+let example_program = load_program "celeste-standard-syntax.lua"
+let inspector_program = load_program "inspect-celeste.lua"
 
 let load_hex_file name size =
   let data =
@@ -839,8 +845,9 @@ let return_from_builtin (value : any_value) (state : state) : state =
   assert (not (is_skipping state));
   { state with return = Some (Some value) }
 
-let builtin_print ctx state args =
-  if ctx.print then List.iter (fun v -> print_endline (show_any_value v)) args;
+let builtin_print always_print ctx state args =
+  if always_print || ctx.print then
+    List.iter (fun v -> print_endline (show_any_value v)) args;
   [ state ]
 
 let builtin_add _ state args =
@@ -999,12 +1006,17 @@ let builtin_sincos sincos _ state args =
   in
   [ return_from_builtin result state ]
 
+let builtin_error ctx state args =
+  List.iter (fun v -> print_endline (show_any_value v)) args;
+  failwith "error function called from lua"
+
 let builtin_dead _ state args = [ state ]
 
 let base_ctx, initial_state =
   let builtins =
     [
-      ("print", builtin_print);
+      ("print", builtin_print false);
+      ("always_print", builtin_print true);
       ("add", builtin_add);
       ("rnd", builtin_rnd);
       ("flr", builtin_flr);
@@ -1018,6 +1030,7 @@ let base_ctx, initial_state =
       ("btn", builtin_btn);
       ("sin", builtin_sincos sin);
       ("cos", builtin_sincos cos);
+      ("error", builtin_error);
       ("music", builtin_dead);
       ("sfx", builtin_dead);
       ("pal", builtin_dead);
@@ -1055,6 +1068,49 @@ let base_ctx, initial_state =
   in
   (ctx, state)
 
+let state_count_objects state =
+  let _, _, value =
+    only
+    @@ interpret_expression base_ctx state
+         (Clist [ Ident "count"; Args (Elist [ Ident "objects" ]) ])
+  in
+  value |> number_range_of_any_value |> single_number_of_range
+  |> int_of_pico_number
+
+let state_find_player_spawn state : object_table option =
+  let state = only @@ interpret_program base_ctx state inspector_program in
+  let state, _, value =
+    only
+    @@ interpret_expression base_ctx state
+         (Clist [ Ident "find_player_spawn"; Args (Elist []) ])
+  in
+  match value with
+  | Concrete (ConcreteReference value) -> (
+      match List.nth state.heap value with
+      | ObjectTable value -> Some value
+      | _ -> failwith "not an ObjectTable")
+  | Concrete ConcreteNil -> None
+  | _ -> failwith "not ConcreteReference or ConcreteNil"
+
+let state_of_player_spawn object_table =
+  StringMap.find "state" object_table
+  |> number_range_of_any_value |> single_number_of_range |> int_of_pico_number
+
+let print_states_summary states =
+  let max_objects = states |> List.map state_count_objects |> BatList.max in
+  let player_spawn_states =
+    states
+    |> BatList.filter_map state_find_player_spawn
+    |> List.map state_of_player_spawn
+  in
+  let max_player_spawn_state =
+    match player_spawn_states with
+    | [] -> None
+    | _ -> Some (BatList.max player_spawn_states)
+  in
+  Printf.printf "max_objects: %d, max_player_spawn_state: %d\n" max_objects
+    (Option.value max_player_spawn_state ~default:(-1))
+
 let () =
   let state = initial_state in
   let state = only @@ interpret_program base_ctx state example_program in
@@ -1090,6 +1146,7 @@ let () =
     let states = List.sort_uniq compare_state states in
     Printf.printf "states without duplicates: %d\n" (List.length states);
     flush_all ();
+    print_states_summary states;
     states
   in
   let states =
