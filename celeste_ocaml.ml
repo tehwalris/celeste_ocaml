@@ -117,50 +117,6 @@ type heap_value =
   | Builtin of int
 [@@deriving show, ord]
 
-type state = {
-  heap : heap_value list;
-  scopes : scope list;
-  return : any_value option option;
-  break : bool;
-}
-[@@deriving show, ord]
-
-type ast_numberer = (ast, int) Hashtbl.t * (int, ast) Hashtbl.t
-
-let number_ast (tbl, rev_tbl) ast =
-  match Hashtbl.find_opt tbl ast with
-  | Some i -> i
-  | None ->
-      let i = Hashtbl.length tbl in
-      Hashtbl.add tbl ast i;
-      Hashtbl.add rev_tbl i ast;
-      i
-
-let get_numbered_ast (_, rev_tbl) i = Hashtbl.find rev_tbl i
-
-type builtin =
-  interpreter_context ->
-  state ->
-  (lhs_value option * any_value) list ->
-  state list
-
-and interpreter_context = {
-  on_statement : ast -> unit;
-  on_mark : string * lhs_value -> unit;
-  print : bool;
-  builtins : builtin array;
-  ast_numberer : ast_numberer;
-}
-
-let resolve_scope (name : string) (scopes : scope list) : int option =
-  scopes
-  |> List.find_opt (fun (_, names) -> StringSet.mem name names)
-  |> Option.map (fun (ref, _) -> ref)
-
-let map_ith i cb l =
-  assert (i >= 0 && i < List.length l);
-  List.mapi (fun j v -> if i = j then cb v else v) l
-
 type heap = {
   old_r_values : heap_value array;
   old_rw_values : heap_value array;
@@ -168,6 +124,16 @@ type heap = {
   young_values : (int * heap_value) list;
   size : int;
 }
+[@@deriving show, ord]
+
+let empty_heap =
+  {
+    old_r_values = Array.make 0 UnknownTable;
+    old_rw_values = Array.make 0 UnknownTable;
+    old_indices = Array.make 0 (false, 0);
+    young_values = [];
+    size = 0;
+  }
 
 let heap_get (heap : heap) (i : int) : heap_value =
   assert (i >= 0 && i < heap.size);
@@ -178,7 +144,7 @@ let heap_get (heap : heap) (i : int) : heap_value =
     | true, j -> Array.get heap.old_rw_values j
   else heap.young_values |> List.find (fun (j, v) -> i = j) |> fun (_, v) -> v
 
-let heap_map (heap : heap) (i : int) f : heap =
+let heap_update (heap : heap) (i : int) f : heap =
   assert (i >= 0 && i < heap.size);
   let old_count = Array.length heap.old_indices in
   if i < old_count then (
@@ -186,12 +152,12 @@ let heap_map (heap : heap) (i : int) f : heap =
     | false, j -> failwith "write to read-only part of heap"
     | true, j ->
         let values = Array.copy heap.old_rw_values in
-        Array.set values i (f @@ Array.get values i);
+        Array.set values j (f @@ Array.get values j);
         { heap with old_rw_values = values })
   else
     { heap with young_values = (i, f @@ heap_get heap i) :: heap.young_values }
 
-let heap_set (heap : heap) (i : int) v : heap = heap_map heap i (fun _ -> v)
+let heap_set (heap : heap) (i : int) v : heap = heap_update heap i (fun _ -> v)
 
 let heap_allocate (heap : heap) v : heap * int =
   let i = heap.size in
@@ -241,10 +207,54 @@ let array_of_heap heap =
          if Array.get values i = None then Array.set values i (Some v));
   Array.map Option.get values
 
+type state = {
+  heap : heap;
+  scopes : scope list;
+  return : any_value option option;
+  break : bool;
+}
+[@@deriving show, ord]
+
+type ast_numberer = (ast, int) Hashtbl.t * (int, ast) Hashtbl.t
+
+let number_ast (tbl, rev_tbl) ast =
+  match Hashtbl.find_opt tbl ast with
+  | Some i -> i
+  | None ->
+      let i = Hashtbl.length tbl in
+      Hashtbl.add tbl ast i;
+      Hashtbl.add rev_tbl i ast;
+      i
+
+let get_numbered_ast (_, rev_tbl) i = Hashtbl.find rev_tbl i
+
+type builtin =
+  interpreter_context ->
+  state ->
+  (lhs_value option * any_value) list ->
+  state list
+
+and interpreter_context = {
+  on_statement : ast -> unit;
+  on_mark : string * lhs_value -> unit;
+  print : bool;
+  builtins : builtin array;
+  ast_numberer : ast_numberer;
+}
+
+let resolve_scope (name : string) (scopes : scope list) : int option =
+  scopes
+  |> List.find_opt (fun (_, names) -> StringSet.mem name names)
+  |> Option.map (fun (ref, _) -> ref)
+
+let map_ith i cb l =
+  assert (i >= 0 && i < List.length l);
+  List.mapi (fun j v -> if i = j then cb v else v) l
+
 let get_by_scope (name : string) (state : state) : int * string * any_value =
   let ref = Option.value (resolve_scope name state.scopes) ~default:0 in
   let value =
-    match List.nth state.heap ref with
+    match heap_get state.heap ref with
     | ObjectTable scope -> StringMap.find_opt name scope
     | _ -> failwith "scope references something that's not an ObjectTable"
   in
@@ -257,16 +267,11 @@ let set_by_scope (name : string) (value : any_value) (state : state) : state =
     | _ -> failwith "scope references something that's not an ObjectTable"
   in
   let ref = Option.value (resolve_scope name state.scopes) ~default:0 in
-  { state with heap = map_ith ref update_table state.heap }
-
-let allocate_raw o state =
-  let i = List.length state.heap in
-  let state = { state with heap = state.heap @ [ o ] } in
-  (state, i)
+  { state with heap = heap_update state.heap ref update_table }
 
 let allocate o state =
-  let state, i = allocate_raw o state in
-  (state, Concrete (ConcreteReference i))
+  let heap, i = heap_allocate state.heap o in
+  ({ state with heap }, Concrete (ConcreteReference i))
 
 let add_local (name : string) ((ref, names) : scope) : scope =
   (ref, StringSet.add name names)
@@ -446,7 +451,7 @@ let rec interpret_expression (ctx : interpreter_context) (state : state)
         | _ -> failwith "element access where right value is not ConcreteNumber"
       in
       let value =
-        match List.nth state.heap lhs_ref with
+        match heap_get state.heap lhs_ref with
         | ArrayTable values -> List.nth values rhs_index
         | _ ->
             failwith
@@ -462,7 +467,7 @@ let rec interpret_expression (ctx : interpreter_context) (state : state)
             failwith "property access where left value is not ConcreteReference"
       in
       let value =
-        match List.nth state.heap lhs_ref with
+        match heap_get state.heap lhs_ref with
         | ObjectTable scope -> StringMap.find_opt rhs_name scope
         | UnknownTable -> None
         | _ ->
@@ -655,7 +660,7 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
                | ObjectTableElement (lhs_ref, lhs_name) ->
                    (lhs_ref, update_object_table lhs_name)
              in
-             { state with heap = map_ith lhs_ref update_table state.heap })
+             { state with heap = heap_update state.heap lhs_ref update_table })
   | _, Lassign (Elist [ Ident name ], expr) ->
       let state =
         only @@ interpret_statement ctx state (Lnames (Elist [ Ident name ]))
@@ -715,15 +720,15 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
         List.fold_left
           (fun state i_value ->
             let old_scopes = state.scopes in
-            let state, scope_ref =
-              allocate_raw
+            let heap, scope_ref =
+              heap_allocate state.heap
                 (ObjectTable (StringMap.singleton i_name i_value))
-                state
             in
             let state =
               {
                 state with
                 scopes = (scope_ref, StringSet.singleton i_name) :: state.scopes;
+                heap;
               }
             in
             let state =
@@ -771,13 +776,14 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
                |> List.find (fun (_, did_match, _) -> did_match)
              in
              let old_scopes = state.scopes in
-             let state, scope_ref =
-               allocate_raw (ObjectTable StringMap.empty) state
+             let heap, scope_ref =
+               heap_allocate state.heap (ObjectTable StringMap.empty)
              in
              let state =
                {
                  state with
                  scopes = (scope_ref, StringSet.empty) :: state.scopes;
+                 heap;
                }
              in
              concat_fold_left
@@ -804,9 +810,12 @@ and interpret_call (ctx : interpreter_context) (state : state)
     | _ -> failwith "callee is not a concrete reference"
   in
   let old_scopes = state.scopes in
-  let state, scope_ref = allocate_raw (ObjectTable StringMap.empty) state in
+  let heap, scope_ref =
+    heap_allocate state.heap (ObjectTable StringMap.empty)
+  in
+  let state = { state with heap } in
   let states =
-    match List.nth state.heap ref with
+    match heap_get state.heap ref with
     | Function (params, body_i, scopes) ->
         let args =
           pad_or_drop (None, Concrete ConcreteNil) (List.length params) args
@@ -844,8 +853,8 @@ and interpret_call (ctx : interpreter_context) (state : state)
 let rec gc_state state : state =
   assert (List.length state.scopes = 0);
   assert (not (is_skipping state));
-  let new_refs_by_old_ref = Array.make (List.length state.heap) None in
-  let heap_array = Array.of_list state.heap in
+  let new_refs_by_old_ref = Array.make state.heap.size None in
+  let heap_array = array_of_heap state.heap in
   let old_refs = Stack.create () in
   let rec f_once (old_ref : int) : int =
     let new_ref, first_visit =
@@ -863,10 +872,11 @@ let rec gc_state state : state =
   {
     state with
     heap =
-      old_refs |> Stack.to_seq |> List.of_seq |> List.rev
-      |> List.mapi (fun new_ref old_ref ->
+      old_refs |> Stack.to_seq |> List.of_seq |> List.rev |> List.to_seq
+      |> BatSeq.mapi (fun new_ref old_ref ->
              assert (old_ref = 0 = (new_ref = 0));
-             Array.get heap_array old_ref |> map_references_heap_value f_once);
+             Array.get heap_array old_ref |> map_references_heap_value f_once)
+      |> heap_of_seq;
   }
 
 and map_references_heap_value f v : heap_value =
@@ -913,10 +923,10 @@ let show_heap_value_short v =
         body_i (List.length scopes)
   | Builtin i -> Printf.sprintf "Builtin %d" i
 
-let print_heap_short (heap : heap_value list) : unit =
-  List.iteri
-    (fun i v -> Printf.printf "%d: %s\n" i (show_heap_value_short v))
-    heap
+let print_heap_short (heap : heap) : unit =
+  heap |> array_of_heap
+  |> Array.iteri (fun i v ->
+         Printf.printf "%d: %s\n" i (show_heap_value_short v))
 
 let interpret_program (ctx : interpreter_context) (state : state)
     (program : ast) : state list =
@@ -1003,7 +1013,7 @@ let builtin_add _ state args =
     | UnknownTable -> ArrayTable [ value ]
     | _ -> failwith "expected ArrayTable or UnknownTable"
   in
-  [ { state with heap = map_ith target_ref update_table state.heap } ]
+  [ { state with heap = heap_update state.heap target_ref update_table } ]
 
 let builtin_del _ state args =
   let args = List.map (fun (_, v) -> v) args in
@@ -1028,7 +1038,7 @@ let builtin_del _ state args =
     | UnknownTable -> ArrayTable []
     | _ -> failwith "expected ArrayTable or UnknownTable"
   in
-  [ { state with heap = map_ith target_ref update_table state.heap } ]
+  [ { state with heap = heap_update state.heap target_ref update_table } ]
 
 let builtin_rnd _ state args =
   let args = List.map (fun (_, v) -> v) args in
@@ -1066,7 +1076,7 @@ let builtin_foreach ctx state args =
     | _ -> failwith "bad arguments to foreach"
   in
   let values =
-    match List.nth state.heap table_ref with
+    match heap_get state.heap table_ref with
     | ArrayTable values -> values
     | UnknownTable -> []
     | _ -> failwith "expected ArrayTable or UnknownTable"
@@ -1143,7 +1153,7 @@ let builtin_count ctx state args =
     | _ -> failwith "bad arguments to count"
   in
   let values =
-    match List.nth state.heap table_ref with
+    match heap_get state.heap table_ref with
     | ArrayTable values -> values
     | UnknownTable -> []
     | _ -> failwith "expected ArrayTable or UnknownTable"
@@ -1235,7 +1245,7 @@ let base_ctx, initial_state =
   in
   let state =
     {
-      heap = [ ObjectTable StringMap.empty ];
+      heap = [ ObjectTable StringMap.empty ] |> List.to_seq |> heap_of_seq;
       scopes = [];
       return = None;
       break = false;
@@ -1280,7 +1290,7 @@ let state_find_player_spawn state : object_table option =
   in
   match value with
   | Concrete (ConcreteReference value) -> (
-      match List.nth state.heap value with
+      match heap_get state.heap value with
       | ObjectTable value -> Some value
       | _ -> failwith "not an ObjectTable")
   | Concrete ConcreteNil -> None
@@ -1327,8 +1337,8 @@ let abstract_state (state : state) : state =
   {
     state with
     heap =
-      state.heap
-      |> List.mapi (fun i heap_value ->
+      state.heap |> array_of_heap |> Array.to_seq
+      |> BatSeq.mapi (fun i heap_value ->
              match heap_value with
              | ArrayTable values ->
                  ArrayTable
@@ -1340,7 +1350,8 @@ let abstract_state (state : state) : state =
                    (StringMap.mapi
                       (fun k v -> get_mapper (ObjectTableElement (i, k)) v)
                       values)
-             | _ -> heap_value);
+             | _ -> heap_value)
+      |> heap_of_seq;
   }
 
 let print_states_summary states =
@@ -1367,11 +1378,11 @@ let () =
     |> interpret_program base_ctx state
     |> only
   in
-  let old_heap_size = List.length state.heap in
+  let old_heap_size = state.heap.size in
   let state = gc_state state in
   print_heap_short state.heap;
   Printf.printf "heap size before gc: %d\n" old_heap_size;
-  Printf.printf "heap size after gc: %d\n" (List.length state.heap);
+  Printf.printf "heap size after gc: %d\n" state.heap.size;
   (* TODO remove later - this clearing is only for debugging*)
   let did_clear = ref false in
   let interpret_multi interpret_or_debug_program states stmt_strs =
@@ -1388,16 +1399,13 @@ let () =
         states stmt_strs
     in
     let largest_state =
-      BatList.max
-        ~cmp:(fun a b -> Int.compare (List.length a.heap) (List.length b.heap))
-        states
+      BatList.max ~cmp:(fun a b -> Int.compare a.heap.size b.heap.size) states
     in
-    Printf.printf "largest state before gc: %d\n"
-      (List.length largest_state.heap);
+    Printf.printf "largest state before gc: %d\n" largest_state.heap.size;
     flush_all ();
     let states = List.map gc_state states in
     Printf.printf "largest state after gc: %d\n"
-      (List.length (gc_state largest_state).heap);
+      (gc_state largest_state).heap.size;
     flush_all ();
     Printf.printf "states with duplicates: %d\n" (List.length states);
     flush_all ();
@@ -1436,8 +1444,6 @@ let () =
      in
      let states = interpret_multi (debug_program base_ctx) states [ "_draw()" ] in *)
   let largest_state =
-    BatList.max
-      ~cmp:(fun a b -> Int.compare (List.length a.heap) (List.length b.heap))
-      states
+    BatList.max ~cmp:(fun a b -> Int.compare a.heap.size b.heap.size) states
   in
   print_heap_short largest_state.heap
