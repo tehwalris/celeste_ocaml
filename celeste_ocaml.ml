@@ -803,7 +803,7 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
       in
       [ state ]
   | _, If1 (cond, body) ->
-      interpret_statement ctx state (If2 (cond, body, Slist []))
+      interpret_statement ctx state (If3 (cond, body, Slist []))
   | _, If2 (cond, then_body, else_body) ->
       interpret_statement ctx state
         (If3 (cond, then_body, Slist [ Elseif (Bool "true", else_body) ]))
@@ -837,21 +837,23 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
                  matches branches
                |> List.find (fun (_, did_match, _) -> did_match)
              in
-             let old_scopes = state.scopes in
-             let heap, scope_ref =
-               heap_allocate state.heap (ObjectTable StringMap.empty)
-             in
-             let state =
-               {
-                 state with
-                 scopes = (scope_ref, StringSet.empty) :: state.scopes;
-                 heap;
-               }
-             in
-             concat_fold_left
-               (fun state ast -> interpret_statement ctx state ast)
-               [ state ] body
-             |> List.map (fun state -> { state with scopes = old_scopes }))
+             if List.length body = 0 then [ state ]
+             else
+               let old_scopes = state.scopes in
+               let heap, scope_ref =
+                 heap_allocate state.heap (ObjectTable StringMap.empty)
+               in
+               let state =
+                 {
+                   state with
+                   scopes = (scope_ref, StringSet.empty) :: state.scopes;
+                   heap;
+                 }
+               in
+               concat_fold_left
+                 (fun state ast -> interpret_statement ctx state ast)
+                 [ state ] body
+               |> List.map (fun state -> { state with scopes = old_scopes }))
   | _, If4 (first_cond, first_body, Slist elseifs, else_body) ->
       interpret_statement ctx state
         (If3

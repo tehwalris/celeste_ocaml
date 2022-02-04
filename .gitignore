@@ -1,5 +1,6 @@
 _build
 /profile.txt
+/perf.data
 /output.txt
 /a.txt
 /b.txt
