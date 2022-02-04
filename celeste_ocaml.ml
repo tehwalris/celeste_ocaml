@@ -109,6 +109,38 @@ let pp_scope (f : Format.formatter) ((ref, values) : scope) =
 
 type identifier = Identifier of string [@@deriving show]
 
+type heap_stats = {
+  gc_count : int ref;
+  old_writes : int ref;
+  old_write_size : int ref;
+  young_writes : int ref;
+  old_r_reads : int ref;
+  old_rw_reads : int ref;
+  young_reads : int ref;
+  young_slow_reads : int ref;
+  young_read_steps : int ref;
+  allocations : int ref;
+  transitions_to_old : int ref;
+}
+[@@deriving show]
+
+let global_heap_stats =
+  {
+    gc_count = ref 0;
+    old_writes = ref 0;
+    old_write_size = ref 0;
+    young_writes = ref 0;
+    old_r_reads = ref 0;
+    old_rw_reads = ref 0;
+    young_reads = ref 0;
+    young_slow_reads = ref 0;
+    young_read_steps = ref 0;
+    allocations = ref 0;
+    transitions_to_old = ref 0;
+  }
+
+let incr_mut r = r := !r + 1
+
 type heap_value =
   | ArrayTable of array_table
   | ObjectTable of object_table
@@ -129,28 +161,49 @@ type heap = {
 let heap_get (heap : heap) (i : int) : heap_value =
   assert (i >= 0 && i < heap.size);
   let old_count = Array.length heap.old_indices in
-  if i < old_count then
+  if i < old_count then (
     match Array.get heap.old_indices i with
-    | false, j -> Array.get heap.old_r_values j
-    | true, j -> Array.get heap.old_rw_values j
-  else heap.young_values |> List.find (fun (j, v) -> i = j) |> fun (_, v) -> v
+    | false, j ->
+        incr_mut global_heap_stats.old_r_reads;
+        Array.get heap.old_r_values j
+    | true, j ->
+        incr_mut global_heap_stats.old_rw_reads;
+        Array.get heap.old_rw_values j)
+  else (
+    incr_mut global_heap_stats.young_reads;
+    let old_steps = !(global_heap_stats.young_read_steps) in
+    let value =
+      heap.young_values
+      |> List.find (fun (j, v) ->
+             incr_mut global_heap_stats.young_read_steps;
+             i = j)
+      |> fun (_, v) -> v
+    in
+    if !(global_heap_stats.young_read_steps) > old_steps + 100 then
+      incr_mut global_heap_stats.young_slow_reads;
+    value)
 
 let heap_update (heap : heap) (i : int) f : heap =
   assert (i >= 0 && i < heap.size);
   let old_count = Array.length heap.old_indices in
   if i < old_count then (
+    incr_mut global_heap_stats.old_writes;
     match Array.get heap.old_indices i with
     | false, j -> failwith "write to read-only part of heap"
     | true, j ->
+        global_heap_stats.old_write_size :=
+          !(global_heap_stats.old_write_size) + Array.length heap.old_rw_values;
         let values = Array.copy heap.old_rw_values in
         Array.set values j (f @@ Array.get values j);
         { heap with old_rw_values = values })
-  else
-    { heap with young_values = (i, f @@ heap_get heap i) :: heap.young_values }
+  else (
+    incr_mut global_heap_stats.young_writes;
+    { heap with young_values = (i, f @@ heap_get heap i) :: heap.young_values })
 
 let heap_set (heap : heap) (i : int) v : heap = heap_update heap i (fun _ -> v)
 
 let heap_allocate (heap : heap) v : heap * int =
+  incr_mut global_heap_stats.allocations;
   let i = heap.size in
   ( {
       heap with
@@ -860,6 +913,7 @@ and interpret_call (ctx : interpreter_context) (state : state)
     states
 
 let rec gc_heap heap : heap_value Seq.t =
+  incr_mut global_heap_stats.gc_count;
   let new_refs_by_old_ref = Array.make heap.size None in
   let heap_array = array_of_heap heap in
   let old_refs = Stack.create () in
@@ -870,6 +924,8 @@ let rec gc_heap heap : heap_value Seq.t =
       | None -> (Stack.length old_refs, true)
     in
     if first_visit then (
+      if old_ref >= Array.length heap.old_indices then
+        incr_mut global_heap_stats.transitions_to_old;
       Array.set new_refs_by_old_ref old_ref (Some new_ref);
       Stack.push old_ref old_refs;
       Array.get heap_array old_ref |> map_references_heap_value f_once |> ignore);
@@ -1446,4 +1502,5 @@ let () =
   let largest_state =
     BatList.max ~cmp:(fun a b -> Int.compare a.heap.size b.heap.size) states
   in
-  print_heap_short largest_state.heap
+  print_heap_short largest_state.heap;
+  print_endline @@ show_heap_stats global_heap_stats
