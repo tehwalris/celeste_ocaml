@@ -1535,7 +1535,7 @@ let () =
     states
   in
   let states =
-    List.init 120 (fun i -> i)
+    List.init 112 (fun i -> i)
     |> List.fold_left
          (fun states i ->
            Printf.printf "frame %d\n" i;
