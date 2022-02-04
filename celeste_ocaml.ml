@@ -979,7 +979,7 @@ let load_program filename =
   BatFile.with_file_in filename (fun f ->
       f |> Batteries.IO.to_input_channel |> Lua_parser.Parse.parse_from_chan)
 
-let example_program = load_program "celeste-standard-syntax.lua"
+let example_program = load_program "celeste-minimal.lua"
 let inspector_program = load_program "inspect-celeste.lua"
 
 let load_hex_file name size =

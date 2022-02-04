@@ -63,7 +63,7 @@ function foreach_hair(cb)
   foreach(
     objects,
     function(o)
-      if o.type == player or o.type == player_spawn then
+      if o.hair ~= nil then
         foreach(o.hair, cb)
       end
     end
