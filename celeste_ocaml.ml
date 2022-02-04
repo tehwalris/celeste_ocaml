@@ -223,7 +223,7 @@ let array_of_heap heap =
          Array.set values i (Some (v, writes)));
   heap.young_values
   |> List.iter (fun (i, v) ->
-         if Array.get values i = None then Array.set values i (Some (v, 1)));
+         if Array.get values i = None then Array.set values i (Some (v, 0)));
   Array.map Option.get values
 
 type state = {
@@ -1412,6 +1412,18 @@ let print_states_summary states =
   Printf.printf "max_objects: %d, max_player_spawn_state: %d\n" max_objects
     (Option.value max_player_spawn_state ~default:(-1))
 
+let compare_state_badness a b =
+  let size_result = Int.compare a.heap.size b.heap.size in
+  let count_hot_writes state =
+    Array.fold_left
+      (fun total (_, writes) -> total + writes)
+      0 state.heap.old_hot_values
+  in
+  let get_write_result () =
+    Int.compare (count_hot_writes a) (count_hot_writes b)
+  in
+  if size_result = 0 then get_write_result () else size_result
+
 let () =
   let state = initial_state in
   let state = only @@ interpret_program base_ctx state example_program in
@@ -1439,10 +1451,8 @@ let () =
     in
     let states = concat_map_sort_uniq_states interpret states in
     Printf.printf "states: %d\n" (List.length states);
-    let largest_state =
-      BatList.max ~cmp:(fun a b -> Int.compare a.heap.size b.heap.size) states
-    in
-    Printf.printf "largest state: %d\n" largest_state.heap.size;
+    let worst_state = BatList.max ~cmp:compare_state_badness states in
+    Printf.printf "worst_state: %d\n" worst_state.heap.size;
     flush_all ();
     print_states_summary states;
     let should_clear =
@@ -1471,21 +1481,20 @@ let () =
          (fun states i ->
            Printf.printf "frame %d\n" i;
            List.fold_left
-             (fun states (stmt_str, reset_writes) ->
-               interpret_multi
-                 (interpret_program base_ctx)
-                 reset_writes states stmt_str)
-             states
-             [ ("_update()", false); ("_draw()", true) ])
+             (fun states stmt_str ->
+               interpret_multi (interpret_program base_ctx) true states stmt_str)
+             states [ "_update()"; "_draw()" ])
          [ state ]
   in
   let states =
-    interpret_multi (interpret_program base_ctx) false states "_update()"
+    List.fold_left
+      (fun states stmt_str ->
+        let states =
+          interpret_multi (interpret_program base_ctx) false states stmt_str
+        in
+        let worst_state = BatList.max ~cmp:compare_state_badness states in
+        print_heap_short worst_state.heap;
+        List.map gc_state states)
+      states [ "_update()"; "_draw()" ]
   in
-  let states =
-    interpret_multi (interpret_program base_ctx) false states "_draw()"
-  in
-  let largest_state =
-    BatList.max ~cmp:(fun a b -> Int.compare a.heap.size b.heap.size) states
-  in
-  print_heap_short largest_state.heap
+  ignore @@ states
