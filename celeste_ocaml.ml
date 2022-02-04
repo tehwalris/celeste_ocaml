@@ -769,7 +769,6 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
       let i_from = concrete_number_of_any_value i_from in
       let state, i_to = only @@ interpret_rhs_expression ctx state i_to in
       let i_to = concrete_number_of_any_value i_to in
-      assert (i_from <= i_to);
       let i_values =
         BatEnum.unfold i_from (fun i ->
             if i <= i_to then
