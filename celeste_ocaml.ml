@@ -1052,9 +1052,65 @@ let load_hex_file name size =
 let map_data = load_hex_file "map-data.txt" 8192
 let flag_data = load_hex_file "flag-data.txt" 256
 
+let mget x y =
+  assert (x >= 0 && x < 128);
+  assert (y >= 0 && y < 64);
+  Array.get map_data (x + (y * 128))
+
+let fget i b =
+  assert (b >= 0 && b < 8);
+  let v = Array.get flag_data i in
+  Int.logand v (Int.shift_left 1 b) != 0
+
+let tile_at room_x room_y x y =
+  assert (room_x >= 0 && room_y >= 0 && x >= 0 && y >= 0);
+  mget ((room_x * 16) + x) ((room_y * 16) + y)
+
+let rec search_inclusive_range min max f : bool =
+  min <= max && (f min || search_inclusive_range (min + 1) max f)
+
 let return_from_builtin (value : any_value) (state : state) : state =
   assert (not (is_skipping state));
   { state with return = Some (Some value) }
+
+let state_get_room ctx state : int * int =
+  let get dim =
+    let _, _, value =
+      only
+      @@ interpret_expression ctx state
+           (Clist [ Ident "room"; Key2 (Ident dim) ])
+    in
+    value |> concrete_number_of_any_value |> int_of_pico_number
+  in
+  (get "x", get "y")
+
+let state_count_objects ctx state =
+  let _, _, value =
+    only
+    @@ interpret_expression ctx state
+         (Clist [ Ident "count"; Args (Elist [ Ident "objects" ]) ])
+  in
+  value |> number_range_of_any_value |> single_number_of_range
+  |> int_of_pico_number
+
+let state_find_player_spawn ctx state : object_table option =
+  let state = only @@ interpret_program ctx state inspector_program in
+  let state, _, value =
+    only
+    @@ interpret_expression ctx state
+         (Clist [ Ident "find_player_spawn"; Args (Elist []) ])
+  in
+  match value with
+  | Concrete (ConcreteReference value) -> (
+      match heap_get state.heap value with
+      | ObjectTable value -> Some value
+      | _ -> failwith "not an ObjectTable")
+  | Concrete ConcreteNil -> None
+  | _ -> failwith "not ConcreteReference or ConcreteNil"
+
+let state_of_player_spawn object_table =
+  StringMap.find "state" object_table
+  |> number_range_of_any_value |> single_number_of_range |> int_of_pico_number
 
 let builtin_print always_print ctx state args =
   if always_print || ctx.print then
@@ -1162,12 +1218,11 @@ let builtin_mget _ state args =
     | _ -> failwith "bad arguments to rnd"
   in
   let x = int_of_pico_number x in
-  assert (x >= 0 && x < 128);
   let y = int_of_pico_number y in
-  assert (y >= 0 && y < 64);
-  let v = Array.get map_data (x + (y * 128)) in
   [
-    return_from_builtin (Concrete (ConcreteNumber (pico_number_of_int v))) state;
+    return_from_builtin
+      (Concrete (ConcreteNumber (pico_number_of_int @@ mget x y)))
+      state;
   ]
 
 let builtin_fget _ state args =
@@ -1179,13 +1234,7 @@ let builtin_fget _ state args =
   in
   let i = int_of_pico_number i in
   let b = int_of_pico_number b in
-  assert (b >= 0 && b < 8);
-  let v = Array.get flag_data i in
-  [
-    return_from_builtin
-      (Concrete (ConcreteBoolean (Int.logand v (Int.shift_left 1 b) != 0)))
-      state;
-  ]
+  [ return_from_builtin (Concrete (ConcreteBoolean (fget i b))) state ]
 
 let builtin_minmax minmax _ state args =
   let args = List.map (fun (_, v) -> v) args in
@@ -1275,6 +1324,30 @@ let builtin_mark ctx state args =
   ctx.on_mark (s, lhs_value);
   [ state ]
 
+let builtin_tile_flag_at ctx state args =
+  let args =
+    List.map
+      (fun (_, v) -> v |> concrete_number_of_any_value |> int_of_pico_number)
+      args
+  in
+  let x, y, w, h, flag =
+    match args with
+    | [ x; y; w; h; flag ] -> (x, y, w, h, flag)
+    | _ -> failwith "bad arguments to tile_flag_at"
+  in
+  assert (w >= 0 && h >= 0);
+  let i_min = max 0 x / 8 in
+  let i_max = min 15 (x + w - 1) / 8 in
+  let j_min = max 0 y / 8 in
+  let j_max = min 15 (y + h - 1) / 8 in
+  let room_x, room_y = state_get_room ctx state in
+  let found =
+    search_inclusive_range i_min i_max (fun i ->
+        search_inclusive_range j_min j_max (fun j ->
+            fget (tile_at room_x room_y i j) flag))
+  in
+  [ return_from_builtin (Concrete (ConcreteBoolean found)) state ]
+
 let builtin_dead _ state args = [ state ]
 
 let base_ctx, initial_state =
@@ -1299,6 +1372,7 @@ let base_ctx, initial_state =
       ("error", builtin_error);
       ("music", builtin_dead);
       ("mark", builtin_mark);
+      ("tile_flag_at", builtin_tile_flag_at);
       ("sfx", builtin_dead);
       ("pal", builtin_dead);
       ("rectfill", builtin_dead);
@@ -1336,34 +1410,6 @@ let base_ctx, initial_state =
     }
   in
   (ctx, state)
-
-let state_count_objects state =
-  let _, _, value =
-    only
-    @@ interpret_expression base_ctx state
-         (Clist [ Ident "count"; Args (Elist [ Ident "objects" ]) ])
-  in
-  value |> number_range_of_any_value |> single_number_of_range
-  |> int_of_pico_number
-
-let state_find_player_spawn state : object_table option =
-  let state = only @@ interpret_program base_ctx state inspector_program in
-  let state, _, value =
-    only
-    @@ interpret_expression base_ctx state
-         (Clist [ Ident "find_player_spawn"; Args (Elist []) ])
-  in
-  match value with
-  | Concrete (ConcreteReference value) -> (
-      match heap_get state.heap value with
-      | ObjectTable value -> Some value
-      | _ -> failwith "not an ObjectTable")
-  | Concrete ConcreteNil -> None
-  | _ -> failwith "not ConcreteReference or ConcreteNil"
-
-let state_of_player_spawn object_table =
-  StringMap.find "state" object_table
-  |> number_range_of_any_value |> single_number_of_range |> int_of_pico_number
 
 let abstract_state_mappers =
   [
@@ -1420,10 +1466,12 @@ let abstract_state (state : state) (heap_as_seq : heap_value Seq.t) : state =
   }
 
 let print_states_summary states =
-  let max_objects = states |> List.map state_count_objects |> BatList.max in
+  let max_objects =
+    states |> List.map (state_count_objects base_ctx) |> BatList.max
+  in
   let player_spawn_states =
     states
-    |> BatList.filter_map state_find_player_spawn
+    |> BatList.filter_map @@ state_find_player_spawn base_ctx
     |> List.map state_of_player_spawn
   in
   let max_player_spawn_state =
@@ -1469,7 +1517,7 @@ let () =
     let should_clear =
       (not !did_clear)
       && states
-         |> BatList.filter_map state_find_player_spawn
+         |> BatList.filter_map @@ state_find_player_spawn base_ctx
          |> List.map state_of_player_spawn
          |> List.mem 1
     in
@@ -1478,7 +1526,8 @@ let () =
       if should_clear then
         List.filter
           (fun state ->
-            state |> state_find_player_spawn
+            state
+            |> state_find_player_spawn base_ctx
             |> Option.map state_of_player_spawn
             = Some 1)
           states
@@ -1487,7 +1536,7 @@ let () =
     states
   in
   let states =
-    List.init 112 (fun i -> i)
+    List.init 120 (fun i -> i)
     |> List.fold_left
          (fun states i ->
            Printf.printf "frame %d\n" i;

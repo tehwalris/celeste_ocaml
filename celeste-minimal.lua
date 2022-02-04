@@ -800,7 +800,9 @@ function _update()
 
 	-- update each object
 	foreach(objects,function(obj)
-		obj.move(obj.spd.x,obj.spd.y)
+		if obj.spd.x ~= 0 or obj.spd.y ~= 0 then
+			obj.move(obj.spd.x,obj.spd.y)
+		end
 		if obj.type.update~=nil then
 			obj.type.update(obj) 
 		end
@@ -865,10 +867,6 @@ function sign(v)
 								v<0 and -1 or 0
 end
 
-function maybe()
-	return rnd(1)<0.5
-end
-
 function solid_at(x,y,w,h)
  return tile_flag_at(x,y,w,h,0)
 end
@@ -877,7 +875,8 @@ function ice_at(x,y,w,h)
  return tile_flag_at(x,y,w,h,4)
 end
 
-function tile_flag_at(x,y,w,h,flag)
+-- TODO HACK replaced by builtin for performance
+--[[ function tile_flag_at(x,y,w,h,flag)
  for i=max(0,flr(x/8)),min(15,(x+w-1)/8) do
  	for j=max(0,flr(y/8)),min(15,(y+h-1)/8) do
  		if fget(tile_at(i,j),flag) then
@@ -886,7 +885,7 @@ function tile_flag_at(x,y,w,h,flag)
  	end
  end
 	return false
-end
+end ]]
 
 function tile_at(x,y)
  return mget(room.x * 16 + x, room.y * 16 + y)
