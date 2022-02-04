@@ -74,7 +74,6 @@ player =
 		this.dash_target={x=0,y=0}
 		this.dash_accel={x=0,y=0}
 		this.hitbox = {x=1,y=3,w=6,h=5}
-		this.spr_off=0
 		this.was_on_ground=false
 	end,
 	update=function(this)
@@ -226,24 +225,6 @@ player =
 		 	end	 	 
 			end
 		
-		end
-		
-		-- animation
-		this.spr_off = this.spr_off + (0.25)
-		if not on_ground then
-			if this.is_solid(input,0) then
-				this.spr=5
-			else
-				this.spr=3
-			end
-		elseif btn(k_down) then
-			this.spr=6
-		elseif btn(k_up) then
-			this.spr=7
-		elseif (this.spd.x==0) or (not btn(k_left) and not btn(k_right)) then
-			this.spr=1
-		else
-			this.spr=1+this.spr_off%4
 		end
 		
 		-- next level
