@@ -1326,7 +1326,7 @@ let builtin_mark ctx state args =
   ctx.on_mark (s, lhs_value);
   [ state ]
 
-let ocaml_tile_flag_at ctx state args =
+let builtin_tile_flag_at ctx state args =
   let args =
     List.map
       (fun (_, v) -> v |> concrete_number_of_any_value |> int_of_pico_number)
@@ -1349,23 +1349,6 @@ let ocaml_tile_flag_at ctx state args =
             fget (tile_at room_x room_y i j) flag))
   in
   [ return_from_builtin (Concrete (ConcreteBoolean found)) state ]
-
-let lua_tile_flag_at ctx state args =
-  let _, _, callee = get_by_scope "lua_tile_flag_at" state in
-  let _, result = only @@ interpret_call ctx state callee args in
-  [ return_from_builtin (Option.get result) state ]
-
-let builtin_tile_flag_at ctx state args =
-  let ocaml_state = only @@ ocaml_tile_flag_at ctx state args in
-  let lua_state = only @@ lua_tile_flag_at ctx state args in
-  let show_return = [%derive.show: any_value option option] in
-  if ocaml_state <> lua_state then
-    Printf.printf "args: %s\nocaml: %s\nlua: %s\n"
-      ([%derive.show: any_value list] @@ List.map (fun (_, v) -> v) args)
-      (show_return ocaml_state.return)
-      (show_return lua_state.return);
-  assert (ocaml_state = lua_state);
-  [ ocaml_state ]
 
 let builtin_dead _ state args = [ state ]
 
@@ -1391,7 +1374,6 @@ let base_ctx, initial_state =
       ("error", builtin_error);
       ("music", builtin_dead);
       ("mark", builtin_mark);
-      (* TODO figure out what is causing extra branching with Lua tile_flag_at *)
       ("tile_flag_at", builtin_tile_flag_at);
       ("sfx", builtin_dead);
       ("pal", builtin_dead);
@@ -1556,7 +1538,7 @@ let () =
     states
   in
   let states =
-    List.init 109 (fun i -> i)
+    List.init 112 (fun i -> i)
     |> List.fold_left
          (fun states i ->
            Printf.printf "frame %d\n" i;

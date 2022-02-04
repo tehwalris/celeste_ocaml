@@ -876,7 +876,7 @@ function ice_at(x,y,w,h)
 end
 
 -- TODO HACK replaced by builtin for performance
-function lua_tile_flag_at(x,y,w,h,flag)
+--[[ function tile_flag_at(x,y,w,h,flag)
  for i=max(0,flr(x/8)),min(15,(x+w-1)/8) do
  	for j=max(0,flr(y/8)),min(15,(y+h-1)/8) do
  		if fget(tile_at(i,j),flag) then
@@ -885,7 +885,7 @@ function lua_tile_flag_at(x,y,w,h,flag)
  	end
  end
 	return false
-end
+end ]]
 
 function tile_at(x,y)
  return mget(room.x * 16 + x, room.y * 16 + y)
