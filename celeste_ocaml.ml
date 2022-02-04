@@ -780,27 +780,30 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
       let state =
         List.fold_left
           (fun state i_value ->
-            let old_scopes = state.scopes in
-            let heap, scope_ref =
-              heap_allocate state.heap
-                (ObjectTable (StringMap.singleton i_name i_value))
-            in
-            let state =
-              {
-                state with
-                scopes = (scope_ref, StringSet.singleton i_name) :: state.scopes;
-                heap;
-              }
-            in
-            let state =
-              List.fold_left
-                (fun state ast -> only @@ interpret_statement ctx state ast)
-                state body
-            in
-            { state with scopes = old_scopes; break = false })
+            if is_skipping state then state
+            else
+              let old_scopes = state.scopes in
+              let heap, scope_ref =
+                heap_allocate state.heap
+                  (ObjectTable (StringMap.singleton i_name i_value))
+              in
+              let state =
+                {
+                  state with
+                  scopes =
+                    (scope_ref, StringSet.singleton i_name) :: state.scopes;
+                  heap;
+                }
+              in
+              let state =
+                List.fold_left
+                  (fun state ast -> only @@ interpret_statement ctx state ast)
+                  state body
+              in
+              { state with scopes = old_scopes })
           state i_values
       in
-      [ state ]
+      [ { state with break = false } ]
   | _, If1 (cond, body) ->
       interpret_statement ctx state (If3 (cond, body, Slist []))
   | _, If2 (cond, then_body, else_body) ->
@@ -1323,7 +1326,7 @@ let builtin_mark ctx state args =
   ctx.on_mark (s, lhs_value);
   [ state ]
 
-let builtin_tile_flag_at ctx state args =
+let ocaml_tile_flag_at ctx state args =
   let args =
     List.map
       (fun (_, v) -> v |> concrete_number_of_any_value |> int_of_pico_number)
@@ -1335,10 +1338,10 @@ let builtin_tile_flag_at ctx state args =
     | _ -> failwith "bad arguments to tile_flag_at"
   in
   assert (w >= 0 && h >= 0);
-  let i_min = max 0 x / 8 in
-  let i_max = min 15 (x + w - 1) / 8 in
-  let j_min = max 0 y / 8 in
-  let j_max = min 15 (y + h - 1) / 8 in
+  let i_min = max 0 (x / 8) in
+  let i_max = min 15 ((x + w - 1) / 8) in
+  let j_min = max 0 (y / 8) in
+  let j_max = min 15 ((y + h - 1) / 8) in
   let room_x, room_y = state_get_room ctx state in
   let found =
     search_inclusive_range i_min i_max (fun i ->
@@ -1346,6 +1349,23 @@ let builtin_tile_flag_at ctx state args =
             fget (tile_at room_x room_y i j) flag))
   in
   [ return_from_builtin (Concrete (ConcreteBoolean found)) state ]
+
+let lua_tile_flag_at ctx state args =
+  let _, _, callee = get_by_scope "lua_tile_flag_at" state in
+  let _, result = only @@ interpret_call ctx state callee args in
+  [ return_from_builtin (Option.get result) state ]
+
+let builtin_tile_flag_at ctx state args =
+  let ocaml_state = only @@ ocaml_tile_flag_at ctx state args in
+  let lua_state = only @@ lua_tile_flag_at ctx state args in
+  let show_return = [%derive.show: any_value option option] in
+  if ocaml_state <> lua_state then
+    Printf.printf "args: %s\nocaml: %s\nlua: %s\n"
+      ([%derive.show: any_value list] @@ List.map (fun (_, v) -> v) args)
+      (show_return ocaml_state.return)
+      (show_return lua_state.return);
+  assert (ocaml_state = lua_state);
+  [ ocaml_state ]
 
 let builtin_dead _ state args = [ state ]
 
@@ -1371,6 +1391,7 @@ let base_ctx, initial_state =
       ("error", builtin_error);
       ("music", builtin_dead);
       ("mark", builtin_mark);
+      (* TODO figure out what is causing extra branching with Lua tile_flag_at *)
       ("tile_flag_at", builtin_tile_flag_at);
       ("sfx", builtin_dead);
       ("pal", builtin_dead);
@@ -1535,7 +1556,7 @@ let () =
     states
   in
   let states =
-    List.init 112 (fun i -> i)
+    List.init 109 (fun i -> i)
     |> List.fold_left
          (fun states i ->
            Printf.printf "frame %d\n" i;
@@ -1554,3 +1575,5 @@ let () =
   in
   print_heap_short largest_state.heap;
   print_endline @@ show_heap_stats global_heap_stats
+(* ;
+   states |> List.iter (fun state -> print_endline @@ show_state state) *)
