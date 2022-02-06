@@ -62,6 +62,13 @@ let int_of_pico_number (n : pico_number) : int =
 
 let equal_pico_number = Int32.equal
 let pico_number_below (v : pico_number) = Int32.sub v (Int32.of_int 1)
+let pico_number_above (v : pico_number) = Int32.add v (Int32.of_int 1)
+
+let pico_number_flr (n : pico_number) : pico_number =
+  pico_number_of_ints (whole_int_of_pico_number n) 0
+
+let pico_number_ceil (n : pico_number) : pico_number =
+  pico_number_flr @@ Int32.add n @@ pico_number_below @@ pico_number_of_int 1
 
 let pico_number_mul (a : pico_number) (b : pico_number) =
   let result_high = Int64.mul (Int64.of_int32 a) (Int64.of_int32 b) in
@@ -438,6 +445,11 @@ let rec any_value_of_number_range (v_min : pico_number) (v_max : pico_number) :
 let single_number_of_range (min, max) =
   if min = max then min else failwith "range is not a single number"
 
+let rec number_ranges_intersect (a_min, a_max) (b_min, b_max) =
+  assert (a_min <= a_max && b_min <= b_max);
+  (* TODO not sure if this is correct*)
+  not (a_max < b_min || b_max < a_min)
+
 let rec interpret_expression (ctx : interpreter_context) (state : state)
     (expr : ast) : (state * lhs_value option * any_value) list =
   match expr with
@@ -673,8 +685,28 @@ and interpret_binop_not_short (state : state) (op : string) (left : any_value)
       Abstract AbstractUnknownNumber
   | "==", Concrete left, Concrete right ->
       Concrete (ConcreteBoolean (equal_concrete_value left right))
+  | "==", Concrete (ConcreteNumber _), Abstract (AbstractNumberRange _)
+  | "==", Abstract (AbstractNumberRange _), Concrete (ConcreteNumber _)
+  | "==", Abstract (AbstractNumberRange _), Abstract (AbstractNumberRange _) ->
+      let left = number_range_of_any_value left in
+      let left_min, left_max = left in
+      let right = number_range_of_any_value right in
+      let right_min, right_max = left in
+      any_value_of_bools_direct
+        (left <> right || left_min <> left_max || right_min <> right_max)
+        (number_ranges_intersect left right)
   | "~=", Concrete left, Concrete right ->
       Concrete (ConcreteBoolean (not @@ equal_concrete_value left right))
+  | "~=", Concrete (ConcreteNumber _), Abstract (AbstractNumberRange _)
+  | "~=", Abstract (AbstractNumberRange _), Concrete (ConcreteNumber _)
+  | "~=", Abstract (AbstractNumberRange _), Abstract (AbstractNumberRange _) ->
+      let left = number_range_of_any_value left in
+      let left_min, left_max = left in
+      let right = number_range_of_any_value right in
+      let right_min, right_max = left in
+      any_value_of_bools_direct
+        (number_ranges_intersect left right)
+        (left <> right || left_min <> left_max || right_min <> right_max)
   | "<", _, _ | "<=", _, _ | ">", _, _ | ">=", _, _ ->
       let compare_concrete left right =
         (match op with
@@ -776,8 +808,9 @@ and interpret_statement (ctx : interpreter_context) (state : state) (stmt : ast)
       |> List.map (fun (state, _) -> state)
   | _, Return (Elist [ expr ]) ->
       assert (is_in_call state);
-      let state, value = only @@ interpret_rhs_expression ctx state expr in
-      [ { state with return = Some (Some value) } ]
+      interpret_rhs_expression ctx state expr
+      |> List.map (fun (state, value) ->
+             { state with return = Some (Some value) })
   | _, Return (Elist []) ->
       assert (is_in_call state);
       [ { state with return = Some None } ]
@@ -1197,14 +1230,12 @@ let builtin_rnd _ state args =
 
 let builtin_flr _ state args =
   let args = List.map (fun (_, v) -> v) args in
-  let flr_pico (n : pico_number) : pico_number =
-    pico_number_of_ints (whole_int_of_pico_number n) 0
-  in
   let result =
     match args with
-    | [ Concrete (ConcreteNumber v) ] -> Concrete (ConcreteNumber (flr_pico v))
+    | [ Concrete (ConcreteNumber v) ] ->
+        Concrete (ConcreteNumber (pico_number_flr v))
     | [ Abstract (AbstractNumberRange (min, max)) ] ->
-        any_value_of_number_range (flr_pico min) (flr_pico max)
+        any_value_of_number_range (pico_number_flr min) (pico_number_flr max)
     | _ -> failwith "bad arguments to flr"
   in
   [ return_from_builtin result state ]
@@ -1271,12 +1302,21 @@ let builtin_minmax minmax _ state args =
 
 let builtin_abs _ state args =
   let args = List.map (fun (_, v) -> v) args in
-  let abs_pico (n : pico_number) : pico_number = Int32.abs n in
-  let result =
+  let v_min, v_max =
     match args with
-    | [ Concrete (ConcreteNumber v) ] -> Concrete (ConcreteNumber (abs_pico v))
+    | [ v ] -> number_range_of_any_value v
     | _ -> failwith "bad arguments to abs"
   in
+  let pico_zero = pico_number_of_int 0 in
+  assert (
+    (v_min < pico_zero && v_max < pico_zero)
+    || (v_min >= pico_zero && v_max >= pico_zero));
+  let flip = v_min < pico_zero && v_max < pico_zero in
+  let abs_pico (n : pico_number) : pico_number = Int32.abs n in
+  let result_min, result_max =
+    if flip then (abs_pico v_max, abs_pico v_min) else (v_min, v_max)
+  in
+  let result = any_value_of_number_range result_min result_max in
   [ return_from_builtin result state ]
 
 let builtin_count ctx state args =
@@ -1402,6 +1442,30 @@ let builtin_pre_flr_split ctx state args =
                | _ -> failwith "not an ObjectTable");
          })
 
+let builtin_sign_split ctx state args =
+  let (v_min, v_max), (lhs_ref, lhs_name) =
+    match args with
+    | [ (Some (ObjectTableElement (lhs_ref, lhs_name)), v) ] ->
+        (number_range_of_any_value v, (lhs_ref, lhs_name))
+    | _ -> failwith "bad arguments to sign_split"
+  in
+  let pico_zero = pico_number_of_int 0 in
+  [
+    (v_min, pico_number_below pico_zero);
+    (pico_zero, pico_zero);
+    (pico_number_above pico_zero, v_max);
+  ]
+  |> List.filter (fun (min, max) -> min <= max)
+  |> List.map (fun (min, max) -> any_value_of_number_range min max)
+  |> List.map (fun v ->
+         {
+           state with
+           heap =
+             heap_update state.heap lhs_ref (function
+               | ObjectTable o -> ObjectTable (StringMap.add lhs_name v o)
+               | _ -> failwith "not an ObjectTable");
+         })
+
 let builtin_dead _ state args = [ state ]
 
 let base_ctx, initial_state =
@@ -1428,6 +1492,7 @@ let base_ctx, initial_state =
       ("mark", builtin_mark);
       ("tile_flag_at", builtin_tile_flag_at);
       ("pre_flr_split", builtin_pre_flr_split);
+      ("sign_split", builtin_sign_split);
       ("sfx", builtin_dead);
       ("pal", builtin_dead);
       ("rectfill", builtin_dead);
@@ -1476,7 +1541,13 @@ let abstract_state_mappers =
         | Abstract AbstractUnknownNumber ->
             Abstract AbstractUnknownNumber
         | _ -> failwith "not a number" );
-    ("player_spd", fun v -> v);
+    ( "player_spd",
+      fun v ->
+        let actual_min, actual_max = number_range_of_any_value v in
+        let abstract_min = pico_number_flr actual_min in
+        let abstract_max = pico_number_ceil actual_max in
+        assert (actual_min >= abstract_min && actual_max <= abstract_max);
+        Abstract (AbstractNumberRange (abstract_min, abstract_max)) );
     ( "player_rem",
       fun v ->
         let abstract_min = pico_number_of_string "-0.5" in

@@ -114,6 +114,9 @@ player =
 		 this.grace = this.grace - (1)
 		end
 
+		sign_split(this.spd.x)
+		sign_split(this.spd.y)
+
 		this.dash_effect_time = this.dash_effect_time - (1)
   if this.dash_time > 0 then
   	this.dash_time = this.dash_time - (1)
@@ -206,6 +209,9 @@ player =
 		 		this.spd.x=(this.flip.x and -1 or 1)
 		  	this.spd.y=0
 		 	end
+
+			sign_split(this.spd.x)
+			sign_split(this.spd.y)
 		 	
 		 	freeze=2
 		 	this.dash_target.x=2*sign(this.spd.x)
