@@ -6,6 +6,18 @@ module StringSet = Set.Make (String)
 
 type pico_number = Int32.t [@@deriving show, ord]
 
+(*
+Binary representation of PICO-8 numbers:
+-1.0 0xffff_0000
+-0.5 0xffff_8000
+-0.1 0xffff_E667
+-0.0 0x0000_0000
+ 0.0 0x0000_0000
+ 0.1 0x0000_1999
+ 0.5 0x0000_8000
+ 1.0 0x0001_0000
+*)
+
 let whole_int_of_pico_number (n : pico_number) : int =
   Int32.shift_right n 16 |> Int32.to_int
 
@@ -49,6 +61,7 @@ let int_of_pico_number (n : pico_number) : int =
   whole_int_of_pico_number n
 
 let equal_pico_number = Int32.equal
+let pico_number_below (v : pico_number) = Int32.sub v (Int32.of_int 1)
 
 let pico_number_mul (a : pico_number) (b : pico_number) =
   let result_high = Int64.mul (Int64.of_int32 a) (Int64.of_int32 b) in
@@ -419,7 +432,7 @@ let rec number_range_of_any_value (v : any_value) : pico_number * pico_number =
 let rec any_value_of_number_range (v_min : pico_number) (v_max : pico_number) :
     any_value =
   assert (v_min <= v_max);
-  if v_min == v_max then Concrete (ConcreteNumber v_min)
+  if v_min = v_max then Concrete (ConcreteNumber v_min)
   else Abstract (AbstractNumberRange (v_min, v_max))
 
 let single_number_of_range (min, max) =
@@ -614,6 +627,11 @@ and interpret_binop_not_short (state : state) (op : string) (left : any_value)
       Abstract AbstractUnknownNumber
   | "-", Concrete (ConcreteNumber left), Concrete (ConcreteNumber right) ->
       Concrete (ConcreteNumber (Int32.sub left right))
+  | ( "-",
+      Abstract (AbstractNumberRange (left_min, left_max)),
+      Concrete (ConcreteNumber right) ) ->
+      Abstract
+        (AbstractNumberRange (Int32.sub left_min right, Int32.sub left_max right))
   | ( "-",
       Abstract (AbstractNumberRange (left_min, left_max)),
       Abstract (AbstractNumberRange (right_min, right_max)) ) ->
@@ -1186,7 +1204,7 @@ let builtin_flr _ state args =
     match args with
     | [ Concrete (ConcreteNumber v) ] -> Concrete (ConcreteNumber (flr_pico v))
     | [ Abstract (AbstractNumberRange (min, max)) ] ->
-        Abstract (AbstractNumberRange (flr_pico min, flr_pico max))
+        any_value_of_number_range (flr_pico min) (flr_pico max)
     | _ -> failwith "bad arguments to flr"
   in
   [ return_from_builtin result state ]
@@ -1350,6 +1368,40 @@ let builtin_tile_flag_at ctx state args =
   in
   [ return_from_builtin (Concrete (ConcreteBoolean found)) state ]
 
+let builtin_pre_flr_split ctx state args =
+  let (v_min, v_max), (lhs_ref, lhs_name) =
+    match args with
+    | [ (Some (ObjectTableElement (lhs_ref, lhs_name)), v) ] ->
+        (number_range_of_any_value v, (lhs_ref, lhs_name))
+    | _ -> failwith "bad arguments to pre_flr_split"
+  in
+  let expected_flr v =
+    whole_int_of_pico_number @@ Int32.add v (pico_number_of_string "0.5")
+  in
+  let flr_min = expected_flr v_min in
+  let flr_max = expected_flr v_max in
+  let split_values =
+    BatEnum.unfold flr_min (fun v ->
+        if v <= flr_max then Some (v, v + 1) else None)
+    |> BatList.of_enum
+    |> List.map (fun v ->
+           ( Int32.sub (pico_number_of_int v) (pico_number_of_string "0.5"),
+             pico_number_below
+             @@ Int32.add (pico_number_of_int v) (pico_number_of_string "0.5")
+           ))
+    |> List.map (fun (r_min, r_max) ->
+           any_value_of_number_range (max r_min v_min) (min r_max v_max))
+  in
+  split_values
+  |> List.map (fun v ->
+         {
+           state with
+           heap =
+             heap_update state.heap lhs_ref (function
+               | ObjectTable o -> ObjectTable (StringMap.add lhs_name v o)
+               | _ -> failwith "not an ObjectTable");
+         })
+
 let builtin_dead _ state args = [ state ]
 
 let base_ctx, initial_state =
@@ -1375,6 +1427,7 @@ let base_ctx, initial_state =
       ("music", builtin_dead);
       ("mark", builtin_mark);
       ("tile_flag_at", builtin_tile_flag_at);
+      ("pre_flr_split", builtin_pre_flr_split);
       ("sfx", builtin_dead);
       ("pal", builtin_dead);
       ("rectfill", builtin_dead);
@@ -1423,6 +1476,14 @@ let abstract_state_mappers =
         | Abstract AbstractUnknownNumber ->
             Abstract AbstractUnknownNumber
         | _ -> failwith "not a number" );
+    ("player_spd", fun v -> v);
+    ( "player_rem",
+      fun v ->
+        let abstract_min = pico_number_of_string "-0.5" in
+        let abstract_max = pico_number_below @@ pico_number_of_string "0.5" in
+        let actual_min, actual_max = number_range_of_any_value v in
+        assert (actual_min >= abstract_min && actual_max <= abstract_max);
+        Abstract (AbstractNumberRange (abstract_min, abstract_max)) );
   ]
   |> List.to_seq |> StringMap.of_seq
 
@@ -1538,7 +1599,7 @@ let () =
     states
   in
   let states =
-    List.init 200 (fun i -> i)
+    List.init 120 (fun i -> i)
     |> List.fold_left
          (fun states i ->
            Printf.printf "frame %d\n" i;
@@ -1548,10 +1609,8 @@ let () =
              states [ "_update()"; "_draw()" ])
          [ state ]
   in
-  (* let states =
-       interpret_multi (debug_program base_ctx) states [ "_update()" ]
-     in
-     let states = interpret_multi (debug_program base_ctx) states [ "_draw()" ] in *)
+  (* let states = interpret_multi (debug_program base_ctx) states "_update()" in
+     let states = interpret_multi (debug_program base_ctx) states "_draw()" in *)
   let largest_state =
     BatList.max ~cmp:(fun a b -> Int.compare a.heap.size b.heap.size) states
   in

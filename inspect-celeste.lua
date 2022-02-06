@@ -59,24 +59,30 @@ function find_player_spawn()
   return find_object(function(o) return o.type == player_spawn end)
 end
 
-function foreach_hair(cb)
-  foreach(
-    objects,
-    function(o)
-      if o.hair ~= nil then
-        foreach(o.hair, cb)
-      end
-    end
-  )
-end
-
 function mark_hair(o)
   mark("hair_pos", o.x)
   mark("hair_pos", o.y)
 end
 
+function mark_player(o)
+  mark("player_spd", o.spd.x)
+  mark("player_spd", o.spd.y)
+  mark("player_rem", o.rem.x)
+  mark("player_rem", o.rem.y)
+end
+
 function mark_everything()
-  foreach_hair(mark_hair)
+  foreach(
+    objects,
+    function(o)
+      if o.hair ~= nil then
+        foreach(o.hair, mark_hair)
+      end
+      if o.type == player then
+        mark_player(o)
+      end
+    end
+  )
 end
 
 function inspect_celeste()

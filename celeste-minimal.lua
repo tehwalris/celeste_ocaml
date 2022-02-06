@@ -646,12 +646,14 @@ function init_object(type,x,y)
 		local amount
 		-- [x] get move amount
  	obj.rem.x = obj.rem.x + (ox)
+	  pre_flr_split(obj.rem.x)
 		amount = flr(obj.rem.x + 0.5)
 		obj.rem.x = obj.rem.x - (amount)
 		obj.move_x(amount,0)
 		
 		-- [y] get move amount
 		obj.rem.y = obj.rem.y + (oy)
+	  pre_flr_split(obj.rem.y)
 		amount = flr(obj.rem.y + 0.5)
 		obj.rem.y = obj.rem.y - (amount)
 		obj.move_y(amount)
