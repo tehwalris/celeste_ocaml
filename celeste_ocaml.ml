@@ -1,4 +1,5 @@
 open Lua_parser.Ast
+module T = Tqdm.Tqdm
 module StringMap = Map.Make (String)
 module StringSet = Set.Make (String)
 
@@ -377,16 +378,22 @@ let concat_fold_left_map (f : 'a -> 'b -> ('a * 'c) list) (init : 'a list)
   |> List.map (fun (acc, map_values) -> (acc, List.rev map_values))
 
 let concat_map_sort_uniq_states (f : state -> state list)
-    (old_states : state list) : state list =
+    (old_states : state list) (on_old_state_processed : unit -> unit) :
+    state list * int =
+  let count_with_duplicates = ref 0 in
   let new_states =
     List.fold_left
       (fun new_states state ->
         StateSet.add_seq
-          (f state |> List.sort_uniq compare_state |> List.to_seq)
+          (let states_with_duplicates = f state in
+           count_with_duplicates :=
+             !count_with_duplicates + List.length states_with_duplicates;
+           on_old_state_processed ();
+           states_with_duplicates |> List.sort_uniq compare_state |> List.to_seq)
           new_states)
       StateSet.empty old_states
   in
-  StateSet.elements new_states
+  (StateSet.elements new_states, !count_with_duplicates)
 
 let only xs =
   match xs with
@@ -1641,8 +1648,13 @@ let () =
       interpret_or_debug_program state ast
       |> List.map (fun state -> abstract_state state @@ gc_heap state.heap)
     in
-    let states = concat_map_sort_uniq_states interpret states in
-    Printf.printf "states: %d\n" (List.length states);
+    let states, count_with_duplicates =
+      T.with_bar (List.length states) ~f:(fun tqdm ->
+          concat_map_sort_uniq_states interpret states (fun () ->
+              T.incr tqdm ~by:1))
+    in
+    Printf.printf "states: %d (%d with duplicates)\n" (List.length states)
+      count_with_duplicates;
     let largest_state =
       BatList.max ~cmp:(fun a b -> Int.compare a.heap.size b.heap.size) states
     in
