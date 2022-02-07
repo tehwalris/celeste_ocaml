@@ -71,6 +71,20 @@ let pico_number_flr (n : pico_number) : pico_number =
 let pico_number_ceil (n : pico_number) : pico_number =
   pico_number_flr @@ Int32.add n @@ pico_number_below @@ pico_number_of_int 1
 
+let pico_number_flr_bits (b : int) (n : pico_number) : pico_number =
+  assert (b >= 0 && b <= 16);
+  let result = Int32.logand n @@ Int32.shift_left Int32.minus_one b in
+  assert (result <= n);
+  result
+
+let pico_number_ceil_bits (b : int) (n : pico_number) : pico_number =
+  assert (b >= 0 && b <= 16);
+  let mask = Int32.shift_left Int32.minus_one b in
+  let flr = Int32.logand n mask in
+  let ceil = Int32.logor flr @@ Int32.lognot mask in
+  assert (ceil >= n);
+  ceil
+
 let pico_number_mul (a : pico_number) (b : pico_number) =
   let result_high = Int64.mul (Int64.of_int32 a) (Int64.of_int32 b) in
   let result_low = Int64.shift_right result_high 16 in
@@ -380,9 +394,12 @@ let concat_fold_left_map (f : 'a -> 'b -> ('a * 'c) list) (init : 'a list)
 let concat_map_sort_uniq_states (f : state -> state list)
     (old_states : state list) (on_old_state_processed : unit -> unit) :
     state list * int =
+  let old_states = Array.of_list old_states in
+  (* HACK shuffle so that the progress bar advances more evenly *)
+  BatArray.shuffle old_states;
   let count_with_duplicates = ref 0 in
   let new_states =
-    List.fold_left
+    Array.fold_left
       (fun new_states state ->
         StateSet.add_seq
           (let states_with_duplicates = f state in
@@ -1462,9 +1479,9 @@ let builtin_sign_split ctx state args =
     (pico_zero, pico_zero);
     (pico_number_above pico_zero, v_max);
   ]
-  |> List.filter (fun (min, max) ->
-         min <= max && number_ranges_intersect (min, max) (v_min, v_max))
-  |> List.map (fun (min, max) -> any_value_of_number_range min max)
+  |> List.map (fun (r_min, r_max) -> (max r_min v_min, min r_max v_max))
+  |> List.filter (fun (r_min, r_max) -> r_min <= r_max)
+  |> List.map (fun (r_min, r_max) -> any_value_of_number_range r_min r_max)
   |> List.map (fun v ->
          {
            state with
@@ -1552,17 +1569,23 @@ let abstract_state_mappers =
     ( "player_spd",
       fun v ->
         let actual_min, actual_max = number_range_of_any_value v in
-        let abstract_min = pico_number_flr actual_min in
-        let abstract_max = pico_number_ceil actual_max in
+        let abstract_min = pico_number_flr_bits 14 actual_min in
+        let abstract_max = pico_number_ceil_bits 14 actual_max in
         assert (actual_min >= abstract_min && actual_max <= abstract_max);
         Abstract (AbstractNumberRange (abstract_min, abstract_max)) );
     ( "player_rem",
       fun v ->
-        let abstract_min = pico_number_of_string "-0.5" in
-        let abstract_max = pico_number_below @@ pico_number_of_string "0.5" in
         let actual_min, actual_max = number_range_of_any_value v in
+        let abstract_min = pico_number_flr_bits 13 actual_min in
+        let abstract_max = pico_number_ceil_bits 13 actual_max in
         assert (actual_min >= abstract_min && actual_max <= abstract_max);
-        Abstract (AbstractNumberRange (abstract_min, abstract_max)) );
+        Abstract (AbstractNumberRange (abstract_min, abstract_max)) )
+    (* fun v ->
+       let abstract_min = pico_number_of_string "-0.5" in
+       let abstract_max = pico_number_below @@ pico_number_of_string "0.5" in
+       let actual_min, actual_max = number_range_of_any_value v in
+       assert (actual_min >= abstract_min && actual_max <= abstract_max);
+       Abstract (AbstractNumberRange (abstract_min, abstract_max)) ); *);
   ]
   |> List.to_seq |> StringMap.of_seq
 

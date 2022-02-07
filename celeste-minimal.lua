@@ -64,17 +64,17 @@ end
 player = 
 {
 	init=function(this) 
-		this.p_jump=false
-		this.p_dash=false
+		-- HACK not having these slightly changes the behavior
+--[[ 		this.p_jump=false
+		this.p_dash=false ]]
+
 		this.grace=0
-		this.jbuffer=0
 		this.djump=max_djump
 		this.dash_time=0
 		this.dash_effect_time=0
 		this.dash_target={x=0,y=0}
 		this.dash_accel={x=0,y=0}
 		this.hitbox = {x=1,y=3,w=6,h=5}
-		this.was_on_ground=false
 	end,
 	update=function(this)
 		if (pause_player) then
@@ -94,16 +94,8 @@ player =
 		local on_ground=this.is_solid(0,1)
 		local on_ice=this.is_ice(0,1)
 		
-		local jump = btn(k_jump) and not this.p_jump
-		this.p_jump = btn(k_jump)
-		if (jump) then
-			this.jbuffer=4
-		elseif this.jbuffer>0 then
-		 this.jbuffer = this.jbuffer - 1
-		end
-		
-		local dash = btn(k_dash) and not this.p_dash
-		this.p_dash = btn(k_dash)
+		local jump = btn(k_jump)
+		local dash = btn(k_dash)
 		
 		if on_ground then
 			this.grace=6
@@ -167,17 +159,15 @@ player =
 			end
 
 			-- jump
-			if this.jbuffer>0 then
+			if jump then
 		 	if this.grace>0 then
 		  	-- normal jump
-		  	this.jbuffer=0
 		  	this.grace=0
 					this.spd.y=-2
 				else
 					-- wall jump
 					local wall_dir=(this.is_solid(-3,0) and -1 or this.is_solid(3,0) and 1 or 0)
 					if wall_dir~=0 then
-			 		this.jbuffer=0
 			 		this.spd.y=-2
 			 		this.spd.x=-wall_dir*(maxrun+1)
 					end
@@ -235,9 +225,6 @@ player =
 		
 		-- next level
 		if this.y<-4 and level_index()<30 then next_room() end
-		
-		-- was on the ground
-		this.was_on_ground=on_ground
 		
 	end, --<end update loop
 	
