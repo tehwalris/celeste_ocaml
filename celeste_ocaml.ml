@@ -1455,7 +1455,8 @@ let builtin_sign_split ctx state args =
     (pico_zero, pico_zero);
     (pico_number_above pico_zero, v_max);
   ]
-  |> List.filter (fun (min, max) -> min <= max)
+  |> List.filter (fun (min, max) ->
+         min <= max && number_ranges_intersect (min, max) (v_min, v_max))
   |> List.map (fun (min, max) -> any_value_of_number_range min max)
   |> List.map (fun v ->
          {
