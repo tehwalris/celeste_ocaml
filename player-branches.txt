@@ -1,0 +1,171 @@
+old(spikes_at) -> kill_player
+old(y) > 128 -> kill_player
+old(y) < -4 and old(level_index()) < 30 -> next_room
+
+input := (
+  btn(k_right) -> 1
+  not btn(k_right) and btn(k_left) -> -1
+  not btn(k_right) and not btn(k_left) -> 0
+)
+on_ground := old(is_solid(0, 1))
+on_ice := old(is_ice(0, 1))
+jump := btn(k_jump) and not old(p_jump)
+p_jump := btn(k_jump)
+dash := btn(k_dash) and not old(p_dash)
+v1(grace) := (
+  on_ground -> 6
+  not on_ground and old(grace) > 0 -> old(grace) - 1
+)
+v1(djump) := (
+  on_ground and old(djump) < max_djump -> max_djump
+  not on_ground or old(djump) >= max_djump -> old(djump)
+)
+v1(dash_effect_time) := old(dash_effect_time) - 1
+v1(dash_time) := (
+  old(dash_time) > 0 -> old(dash_time) - 1
+  old(dash_time) <= 0 -> (see other branch)
+)
+v1(spd.x) := (
+  old(dash_time) > 0 -> appr(old(spd.x), old(dash_target.x), old(dash_accel.x))
+  old(dash_time) <= 0 -> (see other branch)
+)
+v1(spd.y) := (
+  old(dash_time) > 0 -> appr(old(spd.y), old(dash_target.y), old(dash_accel.y))
+  old(dash_time) <= 0 -> (see other branch)
+)
+v2(spd.x) := (
+  old(dash_time) > 0 -> v1(spd.x)
+  old(dash_time) <= 0 -> (see other branch)
+)
+v2(spd.y) := (
+  old(dash_time) > 0 -> v1(spd.y)
+  old(dash_time) <= 0 -> (see other branch)
+)
+maxrun := 1
+accel := (
+  not on_ground -> 0.4
+  on_ground and on_ice -> 0.05
+  on_ground and not on_ice -> 0.6
+)
+v1(spd.x) := (
+  old(dash_time) > 0 -> (see other branch)
+  old(dash_time) <= 0 and old(spd.x) > maxrun -> appr(old(spd.x), sign(old(spd.x)) * maxrun, deccel)
+  old(dash_time) <= 0 and old(spd.x) <= maxrun -> appr(old(spd.x), input * maxrun, deccel)
+)
+flip.x := (
+  old(dash_time) > 0 -> old(flip.x)
+  old(dash_time) <= 0 and v1(spd.x) = 0 -> old(flip.x)
+  old(dash_time) <= 0 and v1(spd.x) < 0 -> false
+  old(dash_time) <= 0 and v1(spd.x) > 0 -> true
+)
+maxfall := (
+  input <> 0 and old(is_solid)(input, 0) and not old(is_ice)(input, 0) -> 0.4
+  otherwise -> 2
+)
+gravity := (
+  old(spd.y) <= 0.15 -> 0.21 * 0.5
+  old(spd.y) > 0.15 -> 0.21
+)
+wall_dir := (
+  old(is_solid)(-3, 0) -> -1
+  not old(is_solid)(-3, 0) and old(is_solid)(3, 0) -> 1
+  not old(is_solid)(-3, 0) and not old(is_solid)(3, 0) -> 0
+)
+v1(spd.y) := (
+  old(dash_time) > 0 -> (see other branch)
+  old(dash_time) <= 0 and not on_ground -> appr(old(spd.y), maxfall, gravity)
+  old(dash_time) <= 0 and on_ground -> old(spd.y)
+)
+v2(spd.x) := (
+  old(dash_time) > 0 -> (see other branch)
+  old(dash_time) <= 0 and jump and v1(grace) > 0 -> v1(spd.x)
+  old(dash_time) <= 0 and jump and v1(grace) <= 0 and wall_dir <> 0 -> -wall_dir*(maxrun+1)
+  old(dash_time) <= 0 and jump and v1(grace) <= 0 and wall_dir = 0 -> v1(spd.x)
+  old(dash_time) <= 0 and not jump -> v1(spd.x)
+)
+v2(spd.y) := (
+  old(dash_time) > 0 -> (see other branch)
+  old(dash_time) <= 0 and jump and v1(grace) > 0 -> -2
+  old(dash_time) <= 0 and jump and v1(grace) <= 0 and wall_dir <> 0 -> -2
+  old(dash_time) <= 0 and jump and v1(grace) <= 0 and wall_dir = 0 -> v1(spd.y)
+  old(dash_time) <= 0 and not jump -> v1(spd.y)
+)
+v2(grace) := (
+  old(dash_time) > 0 -> (see other branch)
+  old(dash_time) <= 0 and jump and v1(grace) > 0 -> 0
+  old(dash_time) <= 0 and jump and v1(grace) <= 0 and wall_dir <> 0 -> v1(grace)
+  old(dash_time) <= 0 and jump and v1(grace) <= 0 and wall_dir = 0 -> v1(grace)
+  old(dash_time) <= 0 and not jump -> v1(grace)
+)
+d_full := 5
+d_half := d_full*0.70710678118
+v2(djump) := (
+  v1(djump) > 0 and dash -> v1(djump) - 1
+  v1(djump) > 0 and not dash -> v1(djump)
+  v1(djump) <= 0 -> v1(djump)
+)
+v2(dash_time) := (
+  v1(djump) > 0 and dash -> 4
+  v1(djump) > 0 and not dash -> v1(dash_time)
+  v1(djump) <= 0 -> v1(dash_time)
+)
+has_dashed := (
+  v1(djump) > 0 and dash -> true
+  v1(djump) > 0 and not dash -> old(has_dashed)
+  v1(djump) <= 0 -> old(has_dashed)
+)
+v2(dash_effect_time) := (
+  v1(djump) > 0 and dash -> 10
+  v1(djump) > 0 and not dash -> v1(dash_effect_time)
+  v1(djump) <= 0 -> v1(dash_effect_time)
+)
+v_input := (
+  btn(k_up) -> -1
+  not btn(k_up) and btn(k_down) -> 1
+  not btn(k_up) and not btn(k_down) -> 0
+)
+v3(spd.x) := (
+  v1(djump) > 0 and dash and input <> 0 and v_input <> 0 -> input * d_half
+  v1(djump) > 0 and dash and input <> 0 and v_input = 0 -> input * d_full
+  v1(djump) > 0 and dash and input = 0 and v_input <> 0 -> 0
+  v1(djump) > 0 and dash and input = 0 and v_input = 0 and flip.x -> -1
+  v1(djump) > 0 and dash and input = 0 and v_input = 0 and not flip.x -> 1
+  v1(djump) > 0 and not dash -> v2(spd.x)
+  v1(djump) <= 0 -> v2(spd.x)
+)
+v3(spd.y) := (
+  v1(djump) > 0 and dash and input <> 0 and v_input <> 0 -> v_input * d_half
+  v1(djump) > 0 and dash and input <> 0 and v_input = 0 -> 0
+  v1(djump) > 0 and dash and input = 0 and v_input <> 0 -> v_input * d_full
+  v1(djump) > 0 and dash and input = 0 and v_input = 0 -> 0
+  v1(djump) > 0 and not dash -> v2(spd.y)
+  v1(djump) <= 0 -> v2(spd.y)
+)
+freeze := (
+  v1(djump) > 0 and dash -> 2
+  v1(djump) > 0 and not dash -> old(freeze)
+  v1(djump) <= 0 -> old(freeze)
+)
+dash_target.x := (
+  v1(djump) > 0 and dash -> 2 * sign(v3(spd.x))
+  v1(djump) > 0 and not dash -> old(dash_target.x)
+  v1(djump) <= 0 -> old(dash_target.x)
+)
+dash_target.y := (
+  v1(djump) > 0 and dash and v3(spd.y) < 0 -> (2 * sign(v3(spd.y))) * 0.75
+  v1(djump) > 0 and dash and v3(spd.y) < 0 -> 2 * sign(v3(spd.y))
+  v1(djump) > 0 and not dash -> old(dash_target.x)
+  v1(djump) <= 0 -> old(dash_target.x)
+)
+dash_accel.x := (
+  v1(djump) > 0 and dash and v3(spd.y) <> 0 -> 1.5 * 0.70710678118
+  v1(djump) > 0 and dash and v3(spd.y) = 0 -> 1.5
+  v1(djump) > 0 and not dash -> old(dash_accel.x)
+  v1(djump) <= 0 -> old(dash_accel.x)
+)
+dash_accel.y := (
+  v1(djump) > 0 and dash and v3(spd.x) <> 0 -> 1.5 * 0.70710678118
+  v1(djump) > 0 and dash and v3(spd.x) = 0 -> 1.5
+  v1(djump) > 0 and not dash -> old(dash_accel.y)
+  v1(djump) <= 0 -> old(dash_accel.y)
+)

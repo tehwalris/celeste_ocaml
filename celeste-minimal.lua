@@ -64,10 +64,8 @@ end
 player = 
 {
 	init=function(this) 
-		-- HACK not having these slightly changes the behavior
---[[ 		this.p_jump=false
-		this.p_dash=false ]]
-
+		this.p_jump=false
+		this.p_dash=false
 		this.grace=0
 		this.djump=max_djump
 		this.dash_time=0
@@ -94,8 +92,11 @@ player =
 		local on_ground=this.is_solid(0,1)
 		local on_ice=this.is_ice(0,1)
 		
-		local jump = btn(k_jump)
-		local dash = btn(k_dash)
+		local jump = btn(k_jump) and not this.p_jump
+		this.p_jump = btn(k_jump)
+		
+		local dash = btn(k_dash) and not this.p_dash
+		this.p_dash = btn(k_dash)
 		
 		if on_ground then
 			this.grace=6
@@ -125,9 +126,6 @@ player =
 				accel=0.4
 			elseif on_ice then
 				accel=0.05
-				if input==(this.flip.x and -1 or 1) then
-					accel=0.05
-				end
 			end
 		
 			if abs(this.spd.x) > maxrun then
