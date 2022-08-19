@@ -10,7 +10,6 @@ types = {}
 freeze=0
 will_restart=false
 delay_restart=0
-pause_player=false
 
 k_left=0
 k_right=1
@@ -50,27 +49,46 @@ player =
 		this.hitbox = {x=1,y=3,w=6,h=5}
 	end,
 	update=function(this)
-		if (pause_player) then
-			return
-		end
-		
-		local input = btn(k_right) and 1 or (btn(k_left) and -1 or 0)
+		this.type.update_inner(
+			this,
+			{
+				btn_k_left=btn(k_left),
+				btn_k_right=btn(k_right),
+				btn_k_up=btn(k_up),
+				btn_k_down=btn(k_down),
+				btn_k_jump=btn(k_jump),
+				btn_k_dash=btn(k_dash),
+			},
+			{
+				is_solid_0_1=this.is_solid(0, 1),
+				is_solid_neg_3_0=this.is_solid(-3, 0),
+				is_solid_3_0=this.is_solid(3, 0),
+				y_more_than_128=this.y>128,
+				spikes_at_xspd_low=spikes_at(this.x+this.hitbox.x,this.y+this.hitbox.y,this.hitbox.w,this.hitbox.h,-1,0),
+				spikes_at_xspd_high=spikes_at(this.x+this.hitbox.x,this.y+this.hitbox.y,this.hitbox.w,this.hitbox.h,1,0),
+				spikes_at_yspd_low=spikes_at(this.x+this.hitbox.x,this.y+this.hitbox.y,this.hitbox.w,this.hitbox.h,0,-1),
+				spikes_at_yspd_high=spikes_at(this.x+this.hitbox.x,this.y+this.hitbox.y,this.hitbox.w,this.hitbox.h,0,1),
+			}
+		)
+	end,
+	update_inner=function(this, input_flags, pos_flags)
+		local input = input_flags.btn_k_right and 1 or (input_flags.btn_k_left and -1 or 0)
 		
 		-- spikes collide
-		if spikes_at(this.x+this.hitbox.x,this.y+this.hitbox.y,this.hitbox.w,this.hitbox.h,this.spd.x,this.spd.y) then
+		if (this.spd.x <= 0 and pos_flags.spikes_at_xspd_low) or (this.spd.x >= 0 and pos_flags.spikes_at_xspd_high) or (this.spd.y <= 0 and pos_flags.spikes_at_yspd_low) or (this.spd.y >= 0 and pos_flags.spikes_at_yspd_high) then
 		 kill_player(this) end
 		 
 		-- bottom death
-		if this.y>128 then
+		if pos_flags.y_more_than_128 then
 			kill_player(this) end
 
-		local on_ground=this.is_solid(0,1)
+		local on_ground=pos_flags.is_solid_0_1
 		
-		local jump = btn(k_jump) and not this.p_jump
-		this.p_jump = btn(k_jump)
+		local jump = input_flags.btn_k_jump and not this.p_jump
+		this.p_jump = input_flags.btn_k_jump
 		
-		local dash = btn(k_dash) and not this.p_dash
-		this.p_dash = btn(k_dash)
+		local dash = input_flags.btn_k_dash and not this.p_dash
+		this.p_dash = input_flags.btn_k_dash
 		
 		if on_ground then
 			this.grace=6
@@ -133,7 +151,7 @@ player =
 					this.spd.y=-2
 				else
 					-- wall jump
-					local wall_dir=(this.is_solid(-3,0) and -1 or this.is_solid(3,0) and 1 or 0)
+					local wall_dir=(pos_flags.is_solid_neg_3_0 and -1 or pos_flags.is_solid_3_0 and 1 or 0)
 					if wall_dir~=0 then
 			 		this.spd.y=-2
 			 		this.spd.x=-wall_dir*(maxrun+1)
@@ -149,7 +167,7 @@ player =
 		 	this.djump = this.djump - (1		)
 		 	this.dash_time=4
 		 	this.dash_effect_time=10
-		 	local v_input=(btn(k_up) and -1 or (btn(k_down) and 1 or 0))
+		 	local v_input=(input_flags.btn_k_up and -1 or (input_flags.btn_k_down and 1 or 0))
 		 	if input~=0 then
 		  	if v_input~=0 then
 		   	this.spd.x=input*d_half
