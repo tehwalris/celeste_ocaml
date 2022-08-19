@@ -42,7 +42,6 @@ player = {
         this.grace = 0
         this.djump = max_djump
         this.dash_time = 0
-        this.dash_effect_time = 0
         this.dash_target = {x = 0, y = 0}
         this.dash_accel = {x = 0, y = 0}
         this.hitbox = {x = 1, y = 3, w = 6, h = 5}
@@ -132,7 +131,6 @@ player = {
             this.grace = this.grace - (1)
         end
 
-        this.dash_effect_time = this.dash_effect_time - (1)
         if this.dash_time > 0 then
             this.dash_time = this.dash_time - (1)
             this.spd.x = appr(this.spd.x, this.dash_target.x, this.dash_accel.x)
@@ -198,7 +196,6 @@ player = {
             if this.djump > 0 and dash then
                 this.djump = this.djump - (1)
                 this.dash_time = 4
-                this.dash_effect_time = 10
                 local v_input = (input_flags.btn_k_up and -1 or (input_flags.btn_k_down and 1 or 0))
                 if input ~= 0 then
                     if v_input ~= 0 then
