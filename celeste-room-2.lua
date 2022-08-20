@@ -40,6 +40,7 @@ player = {
         this.p_jump = false
         this.p_dash = false
         this.grace = 0
+        this.jbuffer = 0
         this.djump = max_djump
         this.dash_time = 0
         this.dash_target = {x = 0, y = 0}
@@ -58,6 +59,8 @@ player = {
                 btn_k_dash = btn(k_dash)
             },
             {
+                is_solid_1_0 = this.is_solid(1, 0),
+                is_solid_neg_1_0 = this.is_solid(-1, 0),
                 is_solid_0_1 = this.is_solid(0, 1),
                 is_solid_neg_3_0 = this.is_solid(-3, 0),
                 is_solid_3_0 = this.is_solid(3, 0),
@@ -119,6 +122,12 @@ player = {
         local jump = input_flags.btn_k_jump and not this.p_jump
         this.p_jump = input_flags.btn_k_jump
 
+        if jump then
+			this.jbuffer = 4
+		elseif this.jbuffer > 0 then
+            this.jbuffer = this.jbuffer - (1)
+		end
+
         local dash = input_flags.btn_k_dash and not this.p_dash
         this.p_dash = input_flags.btn_k_dash
 
@@ -165,7 +174,7 @@ player = {
             end
 
             -- wall slide
-            if input ~= 0 and this.is_solid(input, 0) then
+            if (input == 1 and pos_flags.is_solid_1_0) or (input == -1 and pos_flags.is_solid_neg_1_0) then
                 maxfall = 0.4
             end
 
@@ -174,15 +183,17 @@ player = {
             end
 
             -- jump
-            if jump then
+            if this.jbuffer > 0 then
                 if this.grace > 0 then
                     -- normal jump
+                    this.jbuffer = 0
                     this.grace = 0
                     this.spd.y = -2
                 else
                     -- wall jump
                     local wall_dir = (pos_flags.is_solid_neg_3_0 and -1 or pos_flags.is_solid_3_0 and 1 or 0)
                     if wall_dir ~= 0 then
+                        this.jbuffer = 0
                         this.spd.y = -2
                         this.spd.x = -wall_dir * (maxrun + 1)
                     end
@@ -245,6 +256,10 @@ player = {
         end
 
         spr(1, this.x, this.y, 1, 1, this.flip.x, this.flip.y)
+
+        print(this.x.." "..this.y, 0, 0, 8)
+        print(this.spd.x.." "..this.spd.y, 0, 8, 8)
+        print(this.rem.x.." "..this.rem.y, 0, 16, 8)
     end
 }
 
