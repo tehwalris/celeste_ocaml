@@ -1264,6 +1264,7 @@ let builtin_flr _ state args =
   in
   [ return_from_builtin result state ]
 
+(* TODO This behaves differently then pico8 if the table is modified while iterating *)
 let builtin_foreach ctx state args =
   let args = List.map (fun (_, v) -> v) args in
   let table_ref, cb =
