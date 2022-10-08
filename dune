@@ -1,5 +1,5 @@
-(executable
- (name celeste_ocaml)
+(executables
+ (names celeste_ocaml frontend)
  (libraries
   bigarray
   gmp
