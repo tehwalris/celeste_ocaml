@@ -209,7 +209,7 @@ let heap_get (heap : heap) (i : int) : heap_value =
     let old_steps = !(global_heap_stats.young_read_steps) in
     let value =
       heap.young_values
-      |> List.find (fun (j, v) ->
+      |> List.find (fun (j, _v) ->
              incr_mut global_heap_stats.young_read_steps;
              i = j)
       |> fun (_, v) -> v
@@ -224,7 +224,7 @@ let heap_update (heap : heap) (i : int) f : heap =
   if i < old_count then (
     incr_mut global_heap_stats.old_writes;
     match Array.get heap.old_indices i with
-    | false, j -> failwith "write to read-only part of heap"
+    | false, _j -> failwith "write to read-only part of heap"
     | true, j ->
         global_heap_stats.old_write_size :=
           !(global_heap_stats.old_write_size) + Array.length heap.old_rw_values;
@@ -264,8 +264,8 @@ let heap_of_seq (values : heap_value Seq.t) : heap =
       |> BatArray.fold_left_map
            (fun (r_i, rw_i) v ->
              match v with
-             | Some v, None -> ((r_i + 1, rw_i), (false, r_i))
-             | None, Some v -> ((r_i, rw_i + 1), (true, rw_i))
+             | Some _v, None -> ((r_i + 1, rw_i), (false, r_i))
+             | None, Some _v -> ((r_i, rw_i + 1), (true, rw_i))
              | _ -> failwith "unreachable")
            (0, 0)
       |> fun (_, v) -> v );
@@ -431,7 +431,7 @@ let rec bools_of_any_value (v : any_value) : (bool * any_value) list =
         "bools_from_any_value called on a value which could not be converted \
          to a boolean"
 
-let rec any_value_of_bools_direct (maybe_false : bool) (maybe_true : bool) :
+let any_value_of_bools_direct (maybe_false : bool) (maybe_true : bool) :
     any_value =
   match (maybe_false, maybe_true) with
   | false, false -> Abstract (AbstractOneOf [])
@@ -440,7 +440,7 @@ let rec any_value_of_bools_direct (maybe_false : bool) (maybe_true : bool) :
   | true, true ->
       Abstract (AbstractOneOf [ ConcreteBoolean false; ConcreteBoolean true ])
 
-let rec any_value_of_bools (bools : bool list) : any_value =
+let any_value_of_bools (bools : bool list) : any_value =
   let maybe_false, maybe_true =
     List.fold_left
       (fun (maybe_false, maybe_true) b ->
@@ -449,7 +449,7 @@ let rec any_value_of_bools (bools : bool list) : any_value =
   in
   any_value_of_bools_direct maybe_false maybe_true
 
-let rec number_range_of_any_value (v : any_value) : pico_number * pico_number =
+let number_range_of_any_value (v : any_value) : pico_number * pico_number =
   match v with
   | Concrete (ConcreteNumber v) -> (v, v)
   | Abstract (AbstractNumberRange (v_min, v_max)) ->
@@ -460,7 +460,7 @@ let rec number_range_of_any_value (v : any_value) : pico_number * pico_number =
         "number_range_from_any_value called on a value which could not be \
          converted to a number range"
 
-let rec any_value_of_number_range (v_min : pico_number) (v_max : pico_number) :
+let any_value_of_number_range (v_min : pico_number) (v_max : pico_number) :
     any_value =
   assert (v_min <= v_max);
   if v_min = v_max then Concrete (ConcreteNumber v_min)
@@ -469,7 +469,7 @@ let rec any_value_of_number_range (v_min : pico_number) (v_max : pico_number) :
 let single_number_of_range (min, max) =
   if min = max then min else failwith "range is not a single number"
 
-let rec number_ranges_intersect (a_min, a_max) (b_min, b_max) =
+let number_ranges_intersect (a_min, a_max) (b_min, b_max) =
   assert (a_min <= a_max && b_min <= b_max);
   (* TODO not sure if this is correct*)
   not (a_max < b_min || b_max < a_min)
@@ -606,7 +606,7 @@ and interpret_rhs_expression ctx state expr =
   |> List.map (fun (state, _, value) -> (state, value))
 
 (* TODO WARNING some of these unop handlers probably have mistakes*)
-and interpret_unop (state : state) (op : string) (v : any_value) : any_value =
+and interpret_unop (_state : state) (op : string) (v : any_value) : any_value =
   match (String.trim op, v) with
   | "-", Concrete (ConcreteNumber v) -> Concrete (ConcreteNumber (Int32.neg v))
   | "not", _ ->
@@ -1344,7 +1344,7 @@ let builtin_abs _ state args =
   let result = any_value_of_number_range result_min result_max in
   [ return_from_builtin result state ]
 
-let builtin_count ctx state args =
+let builtin_count _ctx state args =
   let args = List.map (fun (_, v) -> v) args in
   let table_ref =
     match args with
@@ -1363,7 +1363,7 @@ let builtin_count ctx state args =
       state;
   ]
 
-let builtin_btn ctx state args =
+let builtin_btn _ctx state args =
   let args = List.map (fun (_, v) -> v) args in
   let i =
     match args with
@@ -1395,7 +1395,7 @@ let builtin_sincos sincos _ state args =
   in
   [ return_from_builtin result state ]
 
-let builtin_error ctx state args =
+let builtin_error _ctx _state args =
   let args = List.map (fun (_, v) -> v) args in
   List.iter (fun v -> print_endline (show_any_value v)) args;
   failwith "error function called from lua"
@@ -1433,7 +1433,7 @@ let builtin_tile_flag_at ctx state args =
   in
   [ return_from_builtin (Concrete (ConcreteBoolean found)) state ]
 
-let builtin_pre_flr_split ctx state args =
+let builtin_pre_flr_split _ctx state args =
   let (v_min, v_max), (lhs_ref, lhs_name) =
     match args with
     | [ (Some (ObjectTableElement (lhs_ref, lhs_name)), v) ] ->
@@ -1467,7 +1467,7 @@ let builtin_pre_flr_split ctx state args =
                | _ -> failwith "not an ObjectTable");
          })
 
-let builtin_sign_split ctx state args =
+let builtin_sign_split _ctx state args =
   let (v_min, v_max), (lhs_ref, lhs_name) =
     match args with
     | [ (Some (ObjectTableElement (lhs_ref, lhs_name)), v) ] ->
@@ -1492,7 +1492,7 @@ let builtin_sign_split ctx state args =
                | _ -> failwith "not an ObjectTable");
          })
 
-let builtin_dead _ state args = [ state ]
+let builtin_dead _ state _args = [ state ]
 
 let base_ctx, initial_state =
   let builtins : (string * builtin) list =
