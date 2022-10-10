@@ -12,7 +12,8 @@ type instruction =
   | Call of local_id * local_id list
 [@@deriving show]
 
-type terminator = Ret | Br of label
+type terminator = Ret | Br of label | Cbr of local_id * label * label
+[@@deriving show]
 
 type block = {
   instructions : (local_id * instruction) list;
