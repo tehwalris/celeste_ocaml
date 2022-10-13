@@ -15,7 +15,10 @@ type instruction =
   | BinaryOp of local_id * string * local_id
 [@@deriving show]
 
-type terminator = Ret | Br of label | Cbr of local_id * label * label
+type terminator =
+  | Ret of local_id option
+  | Br of label
+  | Cbr of local_id * label * label
 [@@deriving show]
 
 type block = {

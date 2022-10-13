@@ -143,6 +143,9 @@ let rec compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
            ( first_cond,
              first_body,
              Slist (elseifs @ [ Elseif (Bool "true", else_body) ]) ))
+  | Return (Elist [ expr ]) ->
+      let expr_id, expr_code = compile_rhs_expression c expr in
+      (c, T (Ir.Ret (Some expr_id)) :: expr_code)
   | _ -> (c, [])
 
 and compile_statements (c : Ctxt.t) (statements : ast list) : Ctxt.t * stream =
@@ -167,7 +170,7 @@ let () =
     statements
     |> List.find_map (function
          | Function
-             (FNlist (Ident "next_room" :: _), Fbody (_, Slist statements)) ->
+             (FNlist (Ident "level_index" :: _), Fbody (_, Slist statements)) ->
              Some statements
          | _ -> None)
   in
