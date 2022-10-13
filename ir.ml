@@ -3,13 +3,16 @@ type label = string [@@deriving show]
 
 type instruction =
   | Alloc
-  | GetOrCreateGlobal of string
+  | GetGlobal of string
   | Load of local_id
   | Store of local_id * local_id
   | StoreEmptyTable of local_id
+  | GetField of local_id * string
   | NumberConstant of Pico_number.t
   | BoolConstant of bool
   | Call of local_id * local_id list
+  | UnaryOp of string * local_id
+  | BinaryOp of local_id * string * local_id
 [@@deriving show]
 
 type terminator = Ret | Br of label | Cbr of local_id * label * label
