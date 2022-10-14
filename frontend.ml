@@ -33,17 +33,19 @@ let gen_id_and_stream (insn : Ir.instruction) : Ir.local_id * stream =
   let id = gen_local_id () in
   (id, [ I (id, insn) ])
 
-let rec compile_lhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream
-    =
+let rec compile_lhs_expression (c : Ctxt.t) (expr : ast)
+    (create_if_missing : bool) : Ir.local_id * stream =
   match expr with
   | Ident name -> (
       match Ctxt.lookup_opt name c with
       | Some id -> (id, [])
-      | None -> gen_id_and_stream (Ir.GetGlobal name))
+      | None -> gen_id_and_stream (Ir.GetGlobal (name, create_if_missing)))
   | Clist [ lhs_expr; Key2 (Ident field_name) ] ->
       let lhs_id, lhs_stream = compile_rhs_expression c lhs_expr in
       let result_id = gen_local_id () in
-      (result_id, I (result_id, Ir.GetField (lhs_id, field_name)) :: lhs_stream)
+      ( result_id,
+        I (result_id, Ir.GetField (lhs_id, field_name, create_if_missing))
+        :: lhs_stream )
   | _ -> (-1, [])
 
 and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
@@ -54,10 +56,6 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
   | Number s -> gen_id_and_stream (Ir.NumberConstant (Pico_number.of_string s))
   | Bool "true" -> gen_id_and_stream (Ir.BoolConstant true)
   | Bool "false" -> gen_id_and_stream (Ir.BoolConstant false)
-  | Ident _ ->
-      let var_id, var_stream = compile_lhs_expression c expr in
-      let val_id = gen_local_id () in
-      (val_id, I (val_id, Ir.Load var_id) :: var_stream)
   | Binop (op, left_expr, right_expr) ->
       let left_id, left_stream = compile_rhs_expression c left_expr in
       let right_id, right_stream = compile_rhs_expression c right_expr in
@@ -66,7 +64,7 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
       in
       (result_id, binop_stream @ right_stream @ left_stream)
   | _ ->
-      let lhs_id, lhs_stream = compile_lhs_expression c expr in
+      let lhs_id, lhs_stream = compile_lhs_expression c expr false in
       if lhs_id == -1 then (-1, [])
       else
         let rhs_id = gen_local_id () in
@@ -75,7 +73,7 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
 let rec compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
   match stmt with
   | Assign (Elist [ lhs_expr ], Elist [ rhs_expr ]) ->
-      let lhs_id, lhs_code = compile_lhs_expression c lhs_expr in
+      let lhs_id, lhs_code = compile_lhs_expression c lhs_expr true in
       let rhs_id, rhs_code = compile_rhs_expression c rhs_expr in
       ( c,
         (I (gen_local_id (), Ir.Store (lhs_id, rhs_id)) :: rhs_code) @ lhs_code

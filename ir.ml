@@ -3,11 +3,11 @@ type label = string [@@deriving show]
 
 type instruction =
   | Alloc
-  | GetGlobal of string
+  | GetGlobal of string * bool
   | Load of local_id
   | Store of local_id * local_id
   | StoreEmptyTable of local_id
-  | GetField of local_id * string
+  | GetField of local_id * string * bool
   | NumberConstant of Pico_number.t
   | BoolConstant of bool
   | Call of local_id * local_id list
