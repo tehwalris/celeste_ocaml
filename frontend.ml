@@ -50,9 +50,27 @@ let rec compile_lhs_expression (c : Ctxt.t) (expr : ast)
 
 and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
   match expr with
-  | Table (Elist []) ->
-      let id = gen_local_id () in
-      (id, [ I (gen_local_id (), Ir.StoreEmptyTable id); I (id, Ir.Alloc) ])
+  | Table (Elist assignments) ->
+      let table_id = gen_local_id () in
+      ( table_id,
+        List.concat_map
+          (function
+            | Assign (Ident field_name, value_expr) ->
+                let field_id = gen_local_id () in
+                let value_id, value_code =
+                  compile_rhs_expression c value_expr
+                in
+                [
+                  I (gen_local_id (), Ir.Store (field_id, value_id));
+                  I (field_id, Ir.GetField (table_id, field_name, true));
+                ]
+                @ value_code
+            | _ -> failwith "only Assign is allowed in Table expression")
+          (List.rev assignments)
+        @ [
+            I (gen_local_id (), Ir.StoreEmptyTable table_id);
+            I (table_id, Ir.Alloc);
+          ] )
   | Number s -> gen_id_and_stream (Ir.NumberConstant (Pico_number.of_string s))
   | Bool "true" -> gen_id_and_stream (Ir.BoolConstant true)
   | Bool "false" -> gen_id_and_stream (Ir.BoolConstant false)
@@ -78,6 +96,14 @@ let rec compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
       ( c,
         (I (gen_local_id (), Ir.Store (lhs_id, rhs_id)) :: rhs_code) @ lhs_code
       )
+  | Lassign (Elist [ Ident lhs_name ], Elist [ rhs_expr ]) ->
+      let var_id = gen_local_id () in
+      let new_c = Ctxt.add c lhs_name var_id in
+      let new_c, assign_code =
+        compile_statement new_c
+          (Assign (Elist [ Ident lhs_name ], Elist [ rhs_expr ]))
+      in
+      (new_c, assign_code @ [ I (var_id, Ir.Alloc) ])
   | Clist [ callee_expr; Args (Elist arg_exprs) ] ->
       let callee_id, callee_code = compile_rhs_expression c callee_expr in
       let arg_ids, arg_codes =
@@ -158,7 +184,7 @@ let load_program filename =
       f |> Batteries.IO.to_input_channel |> Lua_parser.Parse.parse_from_chan)
 
 let () =
-  let example_program = load_program "celeste-minimal.lua" in
+  let example_program = load_program "celeste-standard-syntax.lua" in
   let statements =
     match example_program with
     | Slist statements -> statements
@@ -167,8 +193,9 @@ let () =
   let statements =
     statements
     |> List.find_map (function
-         | Function
-             (FNlist (Ident "level_index" :: _), Fbody (_, Slist statements)) ->
+         | Assign
+             ( Elist [ Ident "draw_hair" ],
+               Elist [ FunctionE (Fbody (_, Slist statements)) ] ) ->
              Some statements
          | _ -> None)
   in
