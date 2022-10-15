@@ -3,10 +3,48 @@ open Lua_parser.Ast
 type stream_el =
   | L of Ir.label
   | I of Ir.local_id * Ir.instruction
-  | T of Ir.terminator
+  | T of Ir.local_id * Ir.terminator
+  | F of Ir.fun_def
 [@@deriving show]
 
 type stream = stream_el list [@@deriving show]
+
+let cfg_of_stream (code : stream) : Ir.cfg * Ir.fun_def list =
+  let make_block instructions terminator : Ir.block =
+    { instructions; terminator = Option.get terminator }
+  in
+  let unused_instructions, unused_terminator, named_blocks, fun_defs =
+    List.fold_left
+      (fun (unused_instructions, unused_terminator, named_blocks, fun_defs) el ->
+        match el with
+        | L label ->
+            ( [],
+              None,
+              (label, make_block unused_instructions unused_terminator)
+              :: named_blocks,
+              fun_defs )
+        | I (id, instruction) ->
+            assert (Option.is_some unused_terminator);
+            ( (id, instruction) :: unused_instructions,
+              unused_terminator,
+              named_blocks,
+              fun_defs )
+        | T (id, terminator) ->
+            assert (unused_instructions = []);
+            assert (Option.is_none unused_terminator);
+            (unused_instructions, Some (id, terminator), named_blocks, fun_defs)
+        | F fun_def ->
+            ( unused_instructions,
+              unused_terminator,
+              named_blocks,
+              fun_def :: fun_defs ))
+      ([], None, [], []) code
+  in
+  ( {
+      entry = make_block unused_instructions unused_terminator;
+      named = named_blocks;
+    },
+    fun_defs )
 
 module Ctxt = struct
   type t = (string * Ir.local_id) list
@@ -22,6 +60,12 @@ let gen_local_id : unit -> int =
   fun () ->
     incr i;
     !i
+
+let gen_global_id : string -> string =
+  let i = ref 0 in
+  fun s ->
+    incr i;
+    Printf.sprintf "%s_%d" s !i
 
 let gen_label : string -> string =
   let i = ref 0 in
@@ -81,6 +125,7 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
         gen_id_and_stream (BinaryOp (left_id, op, right_id))
       in
       (result_id, binop_stream @ right_stream @ left_stream)
+  | FunctionE fun_ast -> compile_closure c fun_ast (Some "anonymous")
   | _ ->
       let lhs_id, lhs_stream = compile_lhs_expression c expr false in
       if lhs_id == -1 then (-1, [])
@@ -88,7 +133,86 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
         let rhs_id = gen_local_id () in
         (rhs_id, I (rhs_id, Ir.Load lhs_id) :: lhs_stream)
 
-let rec compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
+and compile_closure (c : Ctxt.t) (fun_ast : ast) (name_hint : string option) :
+    Ir.local_id * stream =
+  let fun_args, fun_statements =
+    match fun_ast with
+    | Fbody (Elist fun_args, Slist fun_statements) -> (fun_args, fun_statements)
+    | _ -> failwith "unsupported ast for fun_ast"
+  in
+  let fun_args =
+    List.map
+      (function Ident name -> name | _ -> failwith "arguments must be Ident")
+      fun_args
+  in
+  let _, fun_args_has_duplicates =
+    List.fold_left
+      (fun (seen, has_duplicates) s ->
+        (s :: seen, has_duplicates || List.mem s seen))
+      ([], false) fun_args
+  in
+  assert (not fun_args_has_duplicates);
+  let inner_arg_val_ids = List.map (fun _ -> gen_local_id ()) fun_args in
+  let inner_arg_var_ids = List.map (fun _ -> gen_local_id ()) fun_args in
+  let arg_var_code =
+    List.fold_left2
+      (fun code val_id var_id ->
+        [ I (gen_local_id (), Ir.Store (var_id, val_id)); I (var_id, Ir.Alloc) ]
+        @ code)
+      [] inner_arg_val_ids inner_arg_var_ids
+  in
+  let c_no_duplicates =
+    List.fold_left
+      (fun c_no_duplicates (name, local_id) ->
+        if Option.is_some (Ctxt.lookup_opt name c_no_duplicates) then
+          c_no_duplicates
+        else Ctxt.add c_no_duplicates name local_id)
+      Ctxt.empty c
+  in
+  let inner_capture_ids = List.map (fun _ -> gen_local_id ()) c_no_duplicates in
+  let inner_c =
+    List.fold_left2
+      (fun c (name, _) inner_id -> (name, inner_id) :: c)
+      Ctxt.empty c_no_duplicates inner_capture_ids
+  in
+  let inner_c =
+    List.fold_left2
+      (fun c name inner_id -> (name, inner_id) :: c)
+      inner_c fun_args inner_arg_var_ids
+  in
+  let inner_code =
+    (snd @@ compile_statements inner_c fun_statements) @ arg_var_code
+  in
+  let inner_code =
+    match inner_code with
+    | T (_, Ret _) :: _ -> inner_code
+    | _ -> T (gen_local_id (), Ret None) :: inner_code
+  in
+  let cfg, inner_fun_defs = cfg_of_stream inner_code in
+  let fun_name = gen_global_id (Option.value name_hint ~default:"anonymous") in
+  let fun_def : Ir.fun_def =
+    {
+      name = fun_name;
+      capture_ids = inner_capture_ids;
+      arg_ids = inner_arg_val_ids;
+      cfg;
+    }
+  in
+  let closure_id = gen_local_id () in
+  ( closure_id,
+    List.flatten
+      [
+        [
+          I
+            ( gen_local_id (),
+              Ir.StoreClosure
+                (closure_id, fun_name, List.map snd c_no_duplicates) );
+          I (closure_id, Ir.Alloc);
+        ];
+        List.map (fun d -> F d) (fun_def :: inner_fun_defs);
+      ] )
+
+and compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
   match stmt with
   | Assign (Elist [ lhs_expr ], Elist [ rhs_expr ]) ->
       let lhs_id, lhs_code = compile_lhs_expression c lhs_expr true in
@@ -143,11 +267,14 @@ let rec compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
                in
                List.flatten
                  [
-                   [ T (Ir.Br join_label) ];
+                   [ T (gen_local_id (), Ir.Br join_label) ];
                    snd (compile_statements c body);
                    [
                      L body_label;
-                     T (Ir.Cbr (condition_id, body_label, next_condition_label));
+                     T
+                       ( gen_local_id (),
+                         Ir.Cbr (condition_id, body_label, next_condition_label)
+                       );
                    ];
                    condition_code;
                    [ L condition_label ];
@@ -159,7 +286,7 @@ let rec compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
           [
             [ L join_label ];
             branch_codes;
-            [ T (Ir.Br (List.hd condition_labels)) ];
+            [ T (gen_local_id (), Ir.Br (List.hd condition_labels)) ];
           ] )
   | If4 (first_cond, first_body, Slist elseifs, else_body) ->
       compile_statement c
@@ -169,13 +296,13 @@ let rec compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
              Slist (elseifs @ [ Elseif (Bool "true", else_body) ]) ))
   | Return (Elist [ expr ]) ->
       let expr_id, expr_code = compile_rhs_expression c expr in
-      (c, T (Ir.Ret (Some expr_id)) :: expr_code)
+      (c, T (gen_local_id (), Ir.Ret (Some expr_id)) :: expr_code)
   | _ -> (c, [])
 
 and compile_statements (c : Ctxt.t) (statements : ast list) : Ctxt.t * stream =
   List.fold_left
     (fun (old_c, old_code) stmt ->
-      let new_c, extra_code = compile_statement c stmt in
+      let new_c, extra_code = compile_statement old_c stmt in
       (new_c, extra_code @ old_code))
     (c, []) statements
 
