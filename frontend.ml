@@ -126,6 +126,7 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
       in
       (result_id, binop_stream @ right_stream @ left_stream)
   | FunctionE fun_ast -> compile_closure c fun_ast (Some "anonymous")
+  | Pexp inner_expr -> compile_rhs_expression c inner_expr
   | _ ->
       let lhs_id, lhs_stream = compile_lhs_expression c expr false in
       if lhs_id == -1 then (-1, [])
