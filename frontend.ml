@@ -31,6 +31,10 @@ let cfg_of_stream (code : stream) : Ir.cfg * Ir.fun_def list =
               fun_defs )
         | T (id, terminator) ->
             assert (unused_instructions = []);
+            if Option.is_some unused_terminator then
+              Printf.printf "%s\n%s"
+                (Ir.show_terminator @@ snd @@ Option.get unused_terminator)
+                (show_stream code);
             assert (Option.is_none unused_terminator);
             (unused_instructions, Some (id, terminator), named_blocks, fun_defs)
         | F fun_def ->
@@ -84,13 +88,25 @@ let rec compile_lhs_expression (c : Ctxt.t) (expr : ast)
       match Ctxt.lookup_opt name c with
       | Some id -> (id, [])
       | None -> gen_id_and_stream (Ir.GetGlobal (name, create_if_missing)))
+  | Clist [ lhs_expr; Key1 rhs_expr ] ->
+      let lhs_id, lhs_stream = compile_rhs_expression c lhs_expr in
+      let rhs_id, rhs_stream = compile_rhs_expression c rhs_expr in
+      let result_id = gen_local_id () in
+      ( result_id,
+        I (result_id, Ir.GetIndex (lhs_id, rhs_id, create_if_missing))
+        :: rhs_stream
+        @ lhs_stream )
   | Clist [ lhs_expr; Key2 (Ident field_name) ] ->
       let lhs_id, lhs_stream = compile_rhs_expression c lhs_expr in
       let result_id = gen_local_id () in
       ( result_id,
         I (result_id, Ir.GetField (lhs_id, field_name, create_if_missing))
         :: lhs_stream )
-  | _ -> (-1, [])
+  | _ ->
+      Lua_parser.Pp_lua.pp_lua expr;
+      Printf.printf "\n";
+      Lua_parser.Pp_ast.pp_ast_show expr;
+      (-1, [])
 
 and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
   match expr with
@@ -118,18 +134,40 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
   | Number s -> gen_id_and_stream (Ir.NumberConstant (Pico_number.of_string s))
   | Bool "true" -> gen_id_and_stream (Ir.BoolConstant true)
   | Bool "false" -> gen_id_and_stream (Ir.BoolConstant false)
+  | Bool "nil" -> gen_id_and_stream Ir.NilConstant
+  | String s -> gen_id_and_stream (Ir.StringConstant s)
+  | Unop (op, inner_expr) ->
+      let inner_id, inner_stream = compile_rhs_expression c inner_expr in
+      let result_id, result_stream =
+        gen_id_and_stream (UnaryOp (String.trim op, inner_id))
+      in
+      (inner_id, result_stream @ inner_stream)
   | Binop (op, left_expr, right_expr) ->
       let left_id, left_stream = compile_rhs_expression c left_expr in
       let right_id, right_stream = compile_rhs_expression c right_expr in
       let result_id, binop_stream =
-        gen_id_and_stream (BinaryOp (left_id, op, right_id))
+        gen_id_and_stream (BinaryOp (left_id, String.trim op, right_id))
       in
       (result_id, binop_stream @ right_stream @ left_stream)
   | FunctionE fun_ast -> compile_closure c fun_ast (Some "anonymous")
   | Pexp inner_expr -> compile_rhs_expression c inner_expr
+  | Clist [ callee_expr; Args (Elist arg_exprs) ] ->
+      let callee_id, callee_code = compile_rhs_expression c callee_expr in
+      let arg_ids, arg_codes =
+        List.split @@ List.map (compile_rhs_expression c) arg_exprs
+      in
+      let result_id = gen_local_id () in
+      ( result_id,
+        I (result_id, Ir.Call (callee_id, arg_ids))
+        :: (List.concat @@ List.rev arg_codes)
+        @ callee_code )
   | _ ->
       let lhs_id, lhs_stream = compile_lhs_expression c expr false in
-      if lhs_id == -1 then (-1, [])
+      if lhs_id == -1 then (
+        Lua_parser.Pp_lua.pp_lua expr;
+        Printf.printf "\n";
+        Lua_parser.Pp_ast.pp_ast_show expr;
+        (-1, []))
       else
         let rhs_id = gen_local_id () in
         (rhs_id, I (rhs_id, Ir.Load lhs_id) :: lhs_stream)
@@ -221,23 +259,16 @@ and compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
       ( c,
         (I (gen_local_id (), Ir.Store (lhs_id, rhs_id)) :: rhs_code) @ lhs_code
       )
-  | Lassign (Elist [ Ident lhs_name ], Elist [ rhs_expr ]) ->
+  | Lnames (Elist [ Ident lhs_name ]) ->
       let var_id = gen_local_id () in
-      let new_c = Ctxt.add c lhs_name var_id in
-      let new_c, assign_code =
-        compile_statement new_c
-          (Assign (Elist [ Ident lhs_name ], Elist [ rhs_expr ]))
-      in
-      (new_c, assign_code @ [ I (var_id, Ir.Alloc) ])
-  | Clist [ callee_expr; Args (Elist arg_exprs) ] ->
-      let callee_id, callee_code = compile_rhs_expression c callee_expr in
-      let arg_ids, arg_codes =
-        List.split @@ List.map (compile_rhs_expression c) arg_exprs
-      in
-      ( c,
-        I (gen_local_id (), Ir.Call (callee_id, arg_ids))
-        :: (List.concat @@ List.rev arg_codes)
-        @ callee_code )
+      (Ctxt.add c lhs_name var_id, [ I (var_id, Ir.Alloc) ])
+  | Lassign (Elist [ Ident lhs_name ], Elist [ rhs_expr ]) ->
+      compile_statements c
+        [
+          Lnames (Elist [ Ident lhs_name ]);
+          Assign (Elist [ Ident lhs_name ], Elist [ rhs_expr ]);
+        ]
+  | Clist _ -> (c, snd @@ compile_rhs_expression c stmt)
   | If1 (cond, body) -> compile_statement c (If3 (cond, body, Slist []))
   | If2 (cond, then_body, else_body) ->
       compile_statement c
@@ -266,10 +297,16 @@ and compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
                let condition_id, condition_code =
                  compile_rhs_expression c condition
                in
+               let body_stream = snd (compile_statements c body) in
+               let extra_terminator =
+                 match body_stream with
+                 | T (_, Ret _) :: _ -> []
+                 | _ -> [ T (gen_local_id (), Ir.Br join_label) ]
+               in
                List.flatten
                  [
-                   [ T (gen_local_id (), Ir.Br join_label) ];
-                   snd (compile_statements c body);
+                   extra_terminator;
+                   body_stream;
                    [
                      L body_label;
                      T
@@ -295,10 +332,21 @@ and compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
            ( first_cond,
              first_body,
              Slist (elseifs @ [ Elseif (Bool "true", else_body) ]) ))
+  | Return (Elist []) -> (c, [ T (gen_local_id (), Ir.Ret None) ])
   | Return (Elist [ expr ]) ->
       let expr_id, expr_code = compile_rhs_expression c expr in
       (c, T (gen_local_id (), Ir.Ret (Some expr_id)) :: expr_code)
-  | _ -> (c, [])
+  | Function (FNlist [ Ident name ], fun_body) ->
+      let closure_id, closure_code = compile_closure c fun_body (Some name) in
+      let name_id, name_code = compile_lhs_expression c (Ident name) true in
+      ( c,
+        I (gen_local_id (), Ir.Store (name_id, closure_id))
+        :: (name_code @ closure_code) )
+  | _ ->
+      Lua_parser.Pp_lua.pp_lua stmt;
+      Printf.printf "\n";
+      Lua_parser.Pp_ast.pp_ast_show stmt;
+      (c, [])
 
 and compile_statements (c : Ctxt.t) (statements : ast list) : Ctxt.t * stream =
   List.fold_left
@@ -318,27 +366,7 @@ let () =
     | Slist statements -> statements
     | _ -> failwith "expected SList"
   in
-  let statements =
-    statements
-    |> List.find_map (function
-         | Assign
-             ( Elist [ Ident "draw_hair" ],
-               Elist [ FunctionE (Fbody (_, Slist statements)) ] ) ->
-             Some statements
-         | _ -> None)
-  in
-  let statements =
-    match statements with
-    | Some statements -> statements
-    | None -> failwith "target function not found"
-  in
-  let result =
-    snd
-    @@ List.fold_left
-         (fun (c, code) s ->
-           let c, stmt_code = compile_statement c s in
-           (c, stmt_code @ code))
-         (Ctxt.empty, []) statements
-  in
-  Lua_parser.Pp_ast.pp_ast_show (Slist statements);
-  Printf.printf "%s\n" @@ show_stream result
+  let _, result = compile_statements Ctxt.empty statements in
+  (* Lua_parser.Pp_ast.pp_ast_show (Slist statements); *)
+  (* Printf.printf "%s\n" @@ show_stream result *)
+  ()

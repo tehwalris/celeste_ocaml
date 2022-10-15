@@ -10,8 +10,11 @@ type instruction =
   | StoreEmptyTable of local_id
   | StoreClosure of local_id * global_id * local_id list
   | GetField of local_id * string * bool
+  | GetIndex of local_id * local_id * bool
   | NumberConstant of Pico_number.t
   | BoolConstant of bool
+  | StringConstant of string
+  | NilConstant
   | Call of local_id * local_id list
   | UnaryOp of string * local_id
   | BinaryOp of local_id * string * local_id
