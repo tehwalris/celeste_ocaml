@@ -12,6 +12,12 @@ type stream = stream_el list [@@deriving show]
 let ( >@ ) x y = y @ x
 let ( >:: ) x y = y :: x
 
+let unsupported_ast ast default =
+  Lua_parser.Pp_lua.pp_lua ast;
+  Printf.printf "\n";
+  Lua_parser.Pp_ast.pp_ast_show ast;
+  default
+
 let cfg_of_stream (code : stream) : Ir.cfg * Ir.fun_def list =
   let make_block instructions terminator : Ir.block =
     { instructions; terminator = Option.get terminator }
@@ -105,11 +111,7 @@ let rec compile_lhs_expression (c : Ctxt.t) (expr : ast)
         lhs_stream
         >:: I (result_id, Ir.GetField (lhs_id, field_name, create_if_missing))
       )
-  | _ ->
-      Lua_parser.Pp_lua.pp_lua expr;
-      Printf.printf "\n";
-      Lua_parser.Pp_ast.pp_ast_show expr;
-      (-1, [])
+  | _ -> unsupported_ast expr (-1, [])
 
 and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
   match expr with
@@ -168,11 +170,7 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
         >:: I (result_id, Ir.Call (callee_id, arg_ids)) )
   | _ ->
       let lhs_id, lhs_stream = compile_lhs_expression c expr false in
-      if lhs_id == -1 then (
-        Lua_parser.Pp_lua.pp_lua expr;
-        Printf.printf "\n";
-        Lua_parser.Pp_ast.pp_ast_show expr;
-        (-1, []))
+      if lhs_id == -1 then unsupported_ast expr (-1, [])
       else
         let rhs_id = gen_local_id () in
         (rhs_id, lhs_stream >:: I (rhs_id, Ir.Load lhs_id))
@@ -362,11 +360,7 @@ and compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
         >:: I (next_val_id, Ir.BinaryOp (val_id, "+", step_id))
         >:: T (gen_local_id (), Ir.Br head_label)
         >:: L join_label )
-  | _ ->
-      Lua_parser.Pp_lua.pp_lua stmt;
-      Printf.printf "\n";
-      Lua_parser.Pp_ast.pp_ast_show stmt;
-      (c, [])
+  | _ -> unsupported_ast stmt (c, [])
 
 and compile_statements (c : Ctxt.t) (statements : ast list) : Ctxt.t * stream =
   List.fold_left
@@ -386,7 +380,7 @@ let () =
     | Slist statements -> statements
     | _ -> failwith "expected SList"
   in
-  let statements =
+  let target_statements =
     Option.get
     @@ List.find_map
          (function
@@ -396,6 +390,8 @@ let () =
            | _ -> None)
          statements
   in
-  Lua_parser.Pp_ast.pp_ast_show (Slist statements);
-  let _, result = compile_statements Ctxt.empty statements in
-  Printf.printf "%s\n" @@ show_stream result
+  Lua_parser.Pp_ast.pp_ast_show (Slist target_statements);
+  let _, result = compile_statements Ctxt.empty target_statements in
+  Printf.printf "%s\n" @@ show_stream result;
+  let _ = compile_statements Ctxt.empty statements in
+  ()
