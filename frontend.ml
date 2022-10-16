@@ -16,7 +16,7 @@ let unsupported_ast ast default =
   Lua_parser.Pp_lua.pp_lua ast;
   Printf.printf "\n";
   Lua_parser.Pp_ast.pp_ast_show ast;
-  default
+  failwith "unsupported AST"
 
 let cfg_of_stream (code : stream) : Ir.cfg * Ir.fun_def list =
   let make_block instructions terminator : Ir.block =
