@@ -366,7 +366,16 @@ let () =
     | Slist statements -> statements
     | _ -> failwith "expected SList"
   in
+  let statements =
+    Option.get
+    @@ List.find_map
+         (function
+           | Function
+               (FNlist [ Ident "title_screen" ], Fbody (_, Slist statements)) ->
+               Some statements
+           | _ -> None)
+         statements
+  in
+  Lua_parser.Pp_ast.pp_ast_show (Slist statements);
   let _, result = compile_statements Ctxt.empty statements in
-  (* Lua_parser.Pp_ast.pp_ast_show (Slist statements); *)
-  (* Printf.printf "%s\n" @@ show_stream result *)
-  ()
+  Printf.printf "%s\n" @@ show_stream result
