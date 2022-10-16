@@ -300,7 +300,7 @@ and compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
                let body_stream = snd (compile_statements c body) in
                let extra_terminator =
                  match body_stream with
-                 | T (_, Ret _) :: _ -> []
+                 | T _ :: _ -> []
                  | _ -> [ T (gen_local_id (), Ir.Br join_label) ]
                in
                List.flatten
