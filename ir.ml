@@ -18,6 +18,7 @@ type instruction =
   | Call of local_id * local_id list
   | UnaryOp of string * local_id
   | BinaryOp of local_id * string * local_id
+  | Phi of (label * local_id) list
 [@@deriving show]
 
 type terminator =

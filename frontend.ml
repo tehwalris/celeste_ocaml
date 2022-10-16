@@ -331,6 +331,37 @@ and compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
       ( c,
         closure_code >@ name_code
         >:: I (gen_local_id (), Ir.Store (name_id, closure_id)) )
+  | For1 (Ident var_name, start_expr, end_expr, Slist statements) ->
+      let start_id, start_code = compile_rhs_expression c start_expr in
+      let end_id, end_code = compile_rhs_expression c end_expr in
+      let val_id = gen_local_id () in
+      let var_id = gen_local_id () in
+      let step_id = gen_local_id () in
+      let next_val_id = gen_local_id () in
+      let continue_id = gen_local_id () in
+      let init_label = gen_label "for_init" in
+      let head_label = gen_label "for_head" in
+      let body_label = gen_label "for_body" in
+      let join_label = gen_label "for_join" in
+      ( c,
+        []
+        >:: T (gen_local_id (), Ir.Br init_label)
+        >:: L init_label >@ start_code >@ end_code
+        >:: I (step_id, Ir.NumberConstant (Pico_number.of_int 1))
+        >:: T (gen_local_id (), Ir.Br head_label)
+        >:: L head_label
+        >:: I
+              ( val_id,
+                Ir.Phi [ (init_label, start_id); (body_label, next_val_id) ] )
+        >:: I (continue_id, Ir.BinaryOp (val_id, "<=", end_id))
+        >:: T (gen_local_id (), Ir.Cbr (continue_id, body_label, join_label))
+        >:: L body_label
+        >:: I (var_id, Ir.Alloc)
+        >:: I (gen_local_id (), Ir.Store (var_id, val_id))
+        >@ snd @@ compile_statements (Ctxt.add c var_name var_id) statements
+        >:: I (next_val_id, Ir.BinaryOp (val_id, "+", step_id))
+        >:: T (gen_local_id (), Ir.Br head_label)
+        >:: L join_label )
   | _ ->
       Lua_parser.Pp_lua.pp_lua stmt;
       Printf.printf "\n";
