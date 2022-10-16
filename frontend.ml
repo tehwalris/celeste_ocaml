@@ -224,7 +224,7 @@ and compile_closure (c : Ctxt.t) (fun_ast : ast) (name_hint : string option) :
       inner_c fun_args inner_arg_var_ids
   in
   let inner_code =
-    (snd @@ compile_statements inner_c fun_statements) @ arg_var_code
+    (snd @@ compile_statements inner_c None fun_statements) @ arg_var_code
   in
   let inner_code =
     match inner_code with
@@ -250,7 +250,8 @@ and compile_closure (c : Ctxt.t) (fun_ast : ast) (name_hint : string option) :
             Ir.StoreClosure (closure_id, fun_name, List.map snd c_no_duplicates)
           ) )
 
-and compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
+and compile_statement (c : Ctxt.t) (break_label : Ir.label option) (stmt : ast)
+    : Ctxt.t * stream =
   match stmt with
   | Assign (Elist [ lhs_expr ], Elist [ rhs_expr ]) ->
       let lhs_id, lhs_code = compile_lhs_expression c lhs_expr true in
@@ -262,15 +263,16 @@ and compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
       let var_id = gen_local_id () in
       (Ctxt.add c lhs_name var_id, [ I (var_id, Ir.Alloc) ])
   | Lassign (Elist [ Ident lhs_name ], Elist [ rhs_expr ]) ->
-      compile_statements c
+      compile_statements c break_label
         [
           Lnames (Elist [ Ident lhs_name ]);
           Assign (Elist [ Ident lhs_name ], Elist [ rhs_expr ]);
         ]
   | Clist _ -> (c, snd @@ compile_rhs_expression c stmt)
-  | If1 (cond, body) -> compile_statement c (If3 (cond, body, Slist []))
+  | If1 (cond, body) ->
+      compile_statement c break_label (If3 (cond, body, Slist []))
   | If2 (cond, then_body, else_body) ->
-      compile_statement c
+      compile_statement c break_label
         (If3 (cond, then_body, Slist [ Elseif (Bool "true", else_body) ]))
   | If3 (first_cond, first_body, Slist elseifs) ->
       let branches =
@@ -296,7 +298,7 @@ and compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
                let condition_id, condition_code =
                  compile_rhs_expression c condition
                in
-               let body_stream = snd (compile_statements c body) in
+               let body_stream = snd (compile_statements c break_label body) in
                let extra_terminator =
                  match body_stream with
                  | T _ :: _ -> []
@@ -314,7 +316,7 @@ and compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
         [ T (gen_local_id (), Ir.Br (List.hd condition_labels)) ]
         >@ branch_codes >:: L join_label )
   | If4 (first_cond, first_body, Slist elseifs, else_body) ->
-      compile_statement c
+      compile_statement c break_label
         (If3
            ( first_cond,
              first_body,
@@ -356,16 +358,21 @@ and compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
         >:: L body_label
         >:: I (var_id, Ir.Alloc)
         >:: I (gen_local_id (), Ir.Store (var_id, val_id))
-        >@ snd @@ compile_statements (Ctxt.add c var_name var_id) statements
+        >@ snd
+           @@ compile_statements
+                (Ctxt.add c var_name var_id)
+                (Some join_label) statements
         >:: I (next_val_id, Ir.BinaryOp (val_id, "+", step_id))
         >:: T (gen_local_id (), Ir.Br head_label)
         >:: L join_label )
+  | Break -> (c, [ T (gen_local_id (), Ir.Br (Option.get break_label)) ])
   | _ -> unsupported_ast stmt (c, [])
 
-and compile_statements (c : Ctxt.t) (statements : ast list) : Ctxt.t * stream =
+and compile_statements (c : Ctxt.t) (break_label : Ir.label option)
+    (statements : ast list) : Ctxt.t * stream =
   List.fold_left
     (fun (old_c, old_code) stmt ->
-      let new_c, extra_code = compile_statement old_c stmt in
+      let new_c, extra_code = compile_statement old_c break_label stmt in
       (new_c, extra_code @ old_code))
     (c, []) statements
 
@@ -391,7 +398,7 @@ let () =
          statements
   in
   Lua_parser.Pp_ast.pp_ast_show (Slist target_statements);
-  let _, result = compile_statements Ctxt.empty target_statements in
+  let _, result = compile_statements Ctxt.empty None target_statements in
   Printf.printf "%s\n" @@ show_stream result;
-  let _ = compile_statements Ctxt.empty statements in
+  let _ = compile_statements Ctxt.empty None statements in
   ()
