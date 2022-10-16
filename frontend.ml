@@ -9,6 +9,9 @@ type stream_el =
 
 type stream = stream_el list [@@deriving show]
 
+let ( >@ ) x y = y @ x
+let ( >:: ) x y = y :: x
+
 let cfg_of_stream (code : stream) : Ir.cfg * Ir.fun_def list =
   let make_block instructions terminator : Ir.block =
     { instructions; terminator = Option.get terminator }
@@ -93,15 +96,15 @@ let rec compile_lhs_expression (c : Ctxt.t) (expr : ast)
       let rhs_id, rhs_stream = compile_rhs_expression c rhs_expr in
       let result_id = gen_local_id () in
       ( result_id,
-        I (result_id, Ir.GetIndex (lhs_id, rhs_id, create_if_missing))
-        :: rhs_stream
-        @ lhs_stream )
+        lhs_stream >@ rhs_stream
+        >:: I (result_id, Ir.GetIndex (lhs_id, rhs_id, create_if_missing)) )
   | Clist [ lhs_expr; Key2 (Ident field_name) ] ->
       let lhs_id, lhs_stream = compile_rhs_expression c lhs_expr in
       let result_id = gen_local_id () in
       ( result_id,
-        I (result_id, Ir.GetField (lhs_id, field_name, create_if_missing))
-        :: lhs_stream )
+        lhs_stream
+        >:: I (result_id, Ir.GetField (lhs_id, field_name, create_if_missing))
+      )
   | _ ->
       Lua_parser.Pp_lua.pp_lua expr;
       Printf.printf "\n";
@@ -112,7 +115,7 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
   match expr with
   | Table (Elist assignments) ->
       let table_id = gen_local_id () in
-      ( table_id,
+      let assignment_code =
         List.concat_map
           (function
             | Assign (Ident field_name, value_expr) ->
@@ -120,17 +123,19 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
                 let value_id, value_code =
                   compile_rhs_expression c value_expr
                 in
-                [
-                  I (gen_local_id (), Ir.Store (field_id, value_id));
-                  I (field_id, Ir.GetField (table_id, field_name, true));
-                ]
-                @ value_code
+                value_code
+                >:: I (field_id, Ir.GetField (table_id, field_name, true))
+                >:: I (gen_local_id (), Ir.Store (field_id, value_id))
             | _ -> failwith "only Assign is allowed in Table expression")
           (List.rev assignments)
-        @ [
-            I (gen_local_id (), Ir.StoreEmptyTable table_id);
+      in
+      ( table_id,
+        List.rev
+          [
             I (table_id, Ir.Alloc);
-          ] )
+            I (gen_local_id (), Ir.StoreEmptyTable table_id);
+          ]
+        >@ assignment_code )
   | Number s -> gen_id_and_stream (Ir.NumberConstant (Pico_number.of_string s))
   | Bool "true" -> gen_id_and_stream (Ir.BoolConstant true)
   | Bool "false" -> gen_id_and_stream (Ir.BoolConstant false)
@@ -141,14 +146,14 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
       let result_id, result_stream =
         gen_id_and_stream (UnaryOp (String.trim op, inner_id))
       in
-      (inner_id, result_stream @ inner_stream)
+      (inner_id, inner_stream >@ result_stream)
   | Binop (op, left_expr, right_expr) ->
       let left_id, left_stream = compile_rhs_expression c left_expr in
       let right_id, right_stream = compile_rhs_expression c right_expr in
       let result_id, binop_stream =
         gen_id_and_stream (BinaryOp (left_id, String.trim op, right_id))
       in
-      (result_id, binop_stream @ right_stream @ left_stream)
+      (result_id, left_stream >@ right_stream >@ binop_stream)
   | FunctionE fun_ast -> compile_closure c fun_ast (Some "anonymous")
   | Pexp inner_expr -> compile_rhs_expression c inner_expr
   | Clist [ callee_expr; Args (Elist arg_exprs) ] ->
@@ -158,9 +163,9 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
       in
       let result_id = gen_local_id () in
       ( result_id,
-        I (result_id, Ir.Call (callee_id, arg_ids))
-        :: (List.concat @@ List.rev arg_codes)
-        @ callee_code )
+        callee_code
+        >@ List.concat @@ List.rev arg_codes
+        >:: I (result_id, Ir.Call (callee_id, arg_ids)) )
   | _ ->
       let lhs_id, lhs_stream = compile_lhs_expression c expr false in
       if lhs_id == -1 then (
@@ -170,7 +175,7 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
         (-1, []))
       else
         let rhs_id = gen_local_id () in
-        (rhs_id, I (rhs_id, Ir.Load lhs_id) :: lhs_stream)
+        (rhs_id, lhs_stream >:: I (rhs_id, Ir.Load lhs_id))
 
 and compile_closure (c : Ctxt.t) (fun_ast : ast) (name_hint : string option) :
     Ir.local_id * stream =
@@ -196,8 +201,9 @@ and compile_closure (c : Ctxt.t) (fun_ast : ast) (name_hint : string option) :
   let arg_var_code =
     List.fold_left2
       (fun code val_id var_id ->
-        [ I (gen_local_id (), Ir.Store (var_id, val_id)); I (var_id, Ir.Alloc) ]
-        @ code)
+        code
+        >:: I (var_id, Ir.Alloc)
+        >:: I (gen_local_id (), Ir.Store (var_id, val_id)))
       [] inner_arg_val_ids inner_arg_var_ids
   in
   let c_no_duplicates =
@@ -225,7 +231,7 @@ and compile_closure (c : Ctxt.t) (fun_ast : ast) (name_hint : string option) :
   let inner_code =
     match inner_code with
     | T (_, Ret _) :: _ -> inner_code
-    | _ -> T (gen_local_id (), Ret None) :: inner_code
+    | _ -> inner_code >:: T (gen_local_id (), Ret None)
   in
   let cfg, inner_fun_defs = cfg_of_stream inner_code in
   let fun_name = gen_global_id (Option.value name_hint ~default:"anonymous") in
@@ -239,17 +245,12 @@ and compile_closure (c : Ctxt.t) (fun_ast : ast) (name_hint : string option) :
   in
   let closure_id = gen_local_id () in
   ( closure_id,
-    List.flatten
-      [
-        [
-          I
-            ( gen_local_id (),
-              Ir.StoreClosure
-                (closure_id, fun_name, List.map snd c_no_duplicates) );
-          I (closure_id, Ir.Alloc);
-        ];
-        List.map (fun d -> F d) (fun_def :: inner_fun_defs);
-      ] )
+    List.map (fun d -> F d) (fun_def :: inner_fun_defs)
+    >:: I (closure_id, Ir.Alloc)
+    >:: I
+          ( gen_local_id (),
+            Ir.StoreClosure (closure_id, fun_name, List.map snd c_no_duplicates)
+          ) )
 
 and compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
   match stmt with
@@ -257,7 +258,7 @@ and compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
       let lhs_id, lhs_code = compile_lhs_expression c lhs_expr true in
       let rhs_id, rhs_code = compile_rhs_expression c rhs_expr in
       ( c,
-        (I (gen_local_id (), Ir.Store (lhs_id, rhs_id)) :: rhs_code) @ lhs_code
+        lhs_code >@ rhs_code >:: I (gen_local_id (), Ir.Store (lhs_id, rhs_id))
       )
   | Lnames (Elist [ Ident lhs_name ]) ->
       let var_id = gen_local_id () in
@@ -303,29 +304,17 @@ and compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
                  | T _ :: _ -> []
                  | _ -> [ T (gen_local_id (), Ir.Br join_label) ]
                in
-               List.flatten
-                 [
-                   extra_terminator;
-                   body_stream;
-                   [
-                     L body_label;
-                     T
-                       ( gen_local_id (),
-                         Ir.Cbr (condition_id, body_label, next_condition_label)
-                       );
-                   ];
-                   condition_code;
-                   [ L condition_label ];
-                 ])
+               [ L condition_label ] >@ condition_code
+               >:: T
+                     ( gen_local_id (),
+                       Ir.Cbr (condition_id, body_label, next_condition_label)
+                     )
+               >:: L body_label >@ body_stream >@ extra_terminator)
         |> List.flatten
       in
       ( c,
-        List.flatten
-          [
-            [ L join_label ];
-            branch_codes;
-            [ T (gen_local_id (), Ir.Br (List.hd condition_labels)) ];
-          ] )
+        [ T (gen_local_id (), Ir.Br (List.hd condition_labels)) ]
+        >@ branch_codes >:: L join_label )
   | If4 (first_cond, first_body, Slist elseifs, else_body) ->
       compile_statement c
         (If3
@@ -335,13 +324,13 @@ and compile_statement (c : Ctxt.t) (stmt : ast) : Ctxt.t * stream =
   | Return (Elist []) -> (c, [ T (gen_local_id (), Ir.Ret None) ])
   | Return (Elist [ expr ]) ->
       let expr_id, expr_code = compile_rhs_expression c expr in
-      (c, T (gen_local_id (), Ir.Ret (Some expr_id)) :: expr_code)
+      (c, expr_code >:: T (gen_local_id (), Ir.Ret (Some expr_id)))
   | Function (FNlist [ Ident name ], fun_body) ->
       let closure_id, closure_code = compile_closure c fun_body (Some name) in
       let name_id, name_code = compile_lhs_expression c (Ident name) true in
       ( c,
-        I (gen_local_id (), Ir.Store (name_id, closure_id))
-        :: (name_code @ closure_code) )
+        closure_code >@ name_code
+        >:: I (gen_local_id (), Ir.Store (name_id, closure_id)) )
   | _ ->
       Lua_parser.Pp_lua.pp_lua stmt;
       Printf.printf "\n";
