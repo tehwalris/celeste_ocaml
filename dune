@@ -8,7 +8,8 @@
   lua_parser.lib
   batteries
   landmarks
-  tqdm)
+  tqdm
+  ocamlgraph)
  (preprocess
   (pps
    ppx_deriving.show

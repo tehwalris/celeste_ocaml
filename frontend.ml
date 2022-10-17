@@ -1,5 +1,102 @@
 open Lua_parser.Ast
 
+type flow_side = Before | After
+
+module G = Graph.Imperative.Digraph.Concrete (struct
+  type t = flow_side * Ir.local_id
+
+  let compare = Stdlib.compare
+  let hash = Hashtbl.hash
+  let equal = ( = )
+end)
+
+module FlowGraphDot = Graph.Graphviz.Dot (struct
+  include G
+
+  let edge_attributes _ = []
+  let default_edge_attributes _ = []
+  let get_subgraph _ = None
+  let vertex_attributes _ = [ `Shape `Box ]
+
+  let vertex_name (side, id) =
+    let side_string = match side with Before -> "Before" | After -> "After" in
+    Printf.sprintf "\"(%s, %d)\"" side_string id
+
+  let default_vertex_attributes _ = []
+  let graph_attributes _ = []
+end)
+
+let targets_of_terminator (t : Ir.terminator) : Ir.label list =
+  match t with
+  | Ir.Ret _ -> []
+  | Ir.Br l -> [ l ]
+  | Ir.Cbr (_, l_true, l_false) -> [ l_true; l_false ]
+
+let entry_vertex_of_block (block : Ir.block) : G.V.t =
+  match block.instructions with
+  | (id, _) :: _ -> (Before, id)
+  | [] -> (Before, fst @@ block.terminator)
+
+let drop_last l = l |> List.rev |> List.tl |> List.rev
+
+let flow_graph_of_cfg (cfg : Ir.cfg) =
+  let entry_vertex_by_block_label =
+    List.map
+      (fun (label, block) -> (label, entry_vertex_of_block block))
+      cfg.named
+  in
+  let g = G.create () in
+  List.iter
+    (fun (block : Ir.block) ->
+      let ids = List.map fst block.instructions @ [ fst block.terminator ] in
+      assert (ids <> []);
+      let prev_ids = None :: (ids |> drop_last |> List.map (fun v -> Some v)) in
+      List.iter2
+        (fun id prev_id ->
+          G.add_vertex g (Before, id);
+          G.add_vertex g (After, id);
+          G.add_edge g (Before, id) (After, id);
+          match prev_id with
+          | Some prev_id -> G.add_edge g (After, prev_id) (Before, id)
+          | _ -> ())
+        ids prev_ids;
+      block.terminator |> snd |> targets_of_terminator
+      |> List.iter (fun label ->
+             let side, id = List.assoc label entry_vertex_by_block_label in
+             assert (side = Before);
+             G.add_edge g (After, fst block.terminator) (Before, id));
+      ())
+    (cfg.entry :: List.map snd cfg.named);
+  g
+
+(* module Reachability =
+        Graph.Fixpoint.Make
+          (G)
+          (struct
+            type vertex = G.E.vertex
+            type edge = G.E.t
+            type g = G.t
+            type data = bool
+
+            let direction = Graph.Fixpoint.Forward
+            let equal = ( = )
+            let join = ( || )
+            let analyze _ x = x
+          end)
+
+      let temp =
+        Reachability.analyze
+          (fun k -> k = "b")
+          (let g = G.create () in
+           G.add_vertex g "a";
+           G.add_vertex g "b";
+           G.add_edge g "a" "b";
+           g)
+
+   let () =
+     Printf.printf "%b\n" (temp "a");
+     failwith "bleh" *)
+
 type stream_el =
   | L of Ir.label
   | I of Ir.local_id * Ir.instruction
@@ -89,6 +186,9 @@ let gen_label : string -> string =
 let gen_id_and_stream (insn : Ir.instruction) : Ir.local_id * stream =
   let id = gen_local_id () in
   (id, [ I (id, insn) ])
+
+let add_terminator_if_needed (t : Ir.terminator) (code : stream) : stream =
+  match code with T _ :: _ -> code | _ -> code >:: T (gen_local_id (), t)
 
 let rec compile_lhs_expression (c : Ctxt.t) (expr : ast)
     (create_if_missing : bool) : Ir.local_id * stream =
@@ -298,18 +398,17 @@ and compile_statement (c : Ctxt.t) (break_label : Ir.label option) (stmt : ast)
                let condition_id, condition_code =
                  compile_rhs_expression c condition
                in
-               let body_stream = snd (compile_statements c break_label body) in
-               let extra_terminator =
-                 match body_stream with
-                 | T _ :: _ -> []
-                 | _ -> [ T (gen_local_id (), Ir.Br join_label) ]
+               let body_stream =
+                 compile_statements c break_label body
+                 |> snd
+                 |> add_terminator_if_needed (Ir.Br join_label)
                in
-               [ L condition_label ] >@ condition_code
+               [] >:: L condition_label >@ condition_code
                >:: T
                      ( gen_local_id (),
                        Ir.Cbr (condition_id, body_label, next_condition_label)
                      )
-               >:: L body_label >@ body_stream >@ extra_terminator)
+               >:: L body_label >@ body_stream)
         |> List.flatten
       in
       ( c,
@@ -387,18 +486,38 @@ let () =
     | Slist statements -> statements
     | _ -> failwith "expected SList"
   in
-  let target_statements =
+  let target_fun_name = "draw_object" in
+  let target_fun_body =
     Option.get
     @@ List.find_map
          (function
-           | Function
-               (FNlist [ Ident "title_screen" ], Fbody (_, Slist statements)) ->
-               Some statements
+           | Function (FNlist [ Ident name ], fun_body)
+             when name = target_fun_name ->
+               Some fun_body
            | _ -> None)
          statements
   in
-  Lua_parser.Pp_ast.pp_ast_show (Slist target_statements);
-  let _, result = compile_statements Ctxt.empty None target_statements in
-  Printf.printf "%s\n" @@ show_stream result;
-  let _ = compile_statements Ctxt.empty None statements in
+  Lua_parser.Pp_ast.pp_ast_show target_fun_body;
+  let _, stream =
+    compile_closure Ctxt.empty target_fun_body (Some target_fun_name)
+  in
+  let compiled_fun_name =
+    stream
+    |> List.find_map (function
+         | I (_, Ir.StoreClosure (_, s, _)) -> Some s
+         | _ -> None)
+    |> Option.get
+  in
+  Printf.printf "%s\n" compiled_fun_name;
+  let _, fun_defs =
+    stream |> add_terminator_if_needed (Ir.Ret None) |> cfg_of_stream
+  in
+  let target_fun_def =
+    List.find (fun (d : Ir.fun_def) -> d.name == compiled_fun_name) fun_defs
+  in
+  Printf.printf "%s\n" @@ Ir.show_fun_def target_fun_def;
+  let flow_graph = flow_graph_of_cfg target_fun_def.cfg in
+  FlowGraphDot.output_graph (open_out "flow_graph.dot") flow_graph;
   ()
+(* let _, result = compile_statements Ctxt.empty None statements in
+   Printf.printf "%s\n" @@ show_stream @@ List.rev result *)

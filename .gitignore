@@ -4,3 +4,5 @@ _build
 /output.txt
 /a.txt
 /b.txt
+/flow_graph.dot
+/flow_graph.svg
