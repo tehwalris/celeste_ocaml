@@ -10,22 +10,6 @@ module G = Graph.Imperative.Digraph.Concrete (struct
   let equal = ( = )
 end)
 
-module FlowGraphDot = Graph.Graphviz.Dot (struct
-  include G
-
-  let edge_attributes _ = []
-  let default_edge_attributes _ = []
-  let get_subgraph _ = None
-  let vertex_attributes _ = [ `Shape `Box ]
-
-  let vertex_name (side, id) =
-    let side_string = match side with Before -> "Before" | After -> "After" in
-    Printf.sprintf "\"(%s, %d)\"" side_string id
-
-  let default_vertex_attributes _ = []
-  let graph_attributes _ = []
-end)
-
 let targets_of_terminator (t : Ir.terminator) : Ir.label list =
   match t with
   | Ir.Ret _ -> []
@@ -517,7 +501,6 @@ let () =
   in
   Printf.printf "%s\n" @@ Ir.show_fun_def target_fun_def;
   let flow_graph = flow_graph_of_cfg target_fun_def.cfg in
-  FlowGraphDot.output_graph (open_out "flow_graph.dot") flow_graph;
   ()
 (* let _, result = compile_statements Ctxt.empty None statements in
    Printf.printf "%s\n" @@ show_stream @@ List.rev result *)
