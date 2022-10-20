@@ -53,33 +53,194 @@ let flow_graph_of_cfg (cfg : Ir.cfg) =
     (cfg.entry :: List.map snd cfg.named);
   g
 
-(* module Reachability =
-        Graph.Fixpoint.Make
-          (G)
-          (struct
-            type vertex = G.E.vertex
-            type edge = G.E.t
-            type g = G.t
-            type data = bool
+module LocalIdMap = Map.Make (struct
+  type t = Ir.local_id
 
-            let direction = Graph.Fixpoint.Forward
-            let equal = ( = )
-            let join = ( || )
-            let analyze _ x = x
-          end)
+  let compare = Stdlib.compare
+end)
 
-      let temp =
-        Reachability.analyze
-          (fun k -> k = "b")
-          (let g = G.create () in
-           G.add_vertex g "a";
-           G.add_vertex g "b";
-           G.add_edge g "a" "b";
-           g)
+let make_flow_function
+    (instruction_flow : Ir.local_id * Ir.instruction -> 'a -> 'a)
+    (terminator_flow : Ir.terminator -> 'a -> 'a) (cfg : Ir.cfg) :
+    G.E.t -> 'a -> 'a =
+  let blocks = cfg.entry :: List.map snd cfg.named in
+  let instruction_flow_functions =
+    List.concat_map
+      (fun (block : Ir.block) ->
+        List.map
+          (fun (id, instruction) -> (id, instruction_flow (id, instruction)))
+          block.instructions)
+      blocks
+  in
+  let terminator_flow_functions =
+    List.map
+      (fun (block : Ir.block) ->
+        (fst block.terminator, terminator_flow @@ snd block.terminator))
+      blocks
+  in
+  let flow_functions =
+    Seq.append
+      (List.to_seq instruction_flow_functions)
+      (List.to_seq terminator_flow_functions)
+    |> LocalIdMap.of_seq
+  in
+  fun edge ->
+    match edge with
+    | (Before, in_id), (After, out_id) when in_id = out_id ->
+        LocalIdMap.find in_id flow_functions
+    | (After, _), (Before, _) -> Fun.id
+    | _ -> failwith "flow through node went in unexpected direction"
 
-   let () =
-     Printf.printf "%b\n" (temp "a");
-     failwith "bleh" *)
+type fact = {
+  known_store : (Ir.local_id * Ir.local_id) option;
+  replacements : Ir.local_id LocalIdMap.t;
+}
+
+let show_fact (fact : fact) : string =
+  Printf.sprintf "{ known_store = %s; replacements = %s }"
+    (match fact.known_store with
+    | Some (a, b) ->
+        Printf.sprintf "Some (%s, %s)" (Ir.show_local_id a) (Ir.show_local_id b)
+    | None -> "None")
+    (LocalIdMap.bindings fact.replacements
+    |> List.map (fun (a, b) ->
+           Printf.sprintf "(%s, %s)" (Ir.show_local_id a) (Ir.show_local_id b))
+    |> String.concat "; ")
+
+let join (a : fact) (b : fact) : fact =
+  {
+    known_store =
+      (if a.known_store = b.known_store then a.known_store else None);
+    replacements =
+      LocalIdMap.union
+        (fun _ a b -> if a == b then Some a else None)
+        a.replacements b.replacements;
+  }
+
+let flow_function_of_cfg =
+  make_flow_function
+    (fun (out_id, instruction) in_fact ->
+      match instruction with
+      | Alloc -> in_fact
+      | GetGlobal _ -> { in_fact with known_store = None }
+      | Load load_id ->
+          {
+            in_fact with
+            replacements =
+              (match in_fact.known_store with
+              | Some (store_id, store_val) when store_id = load_id ->
+                  LocalIdMap.add out_id store_val in_fact.replacements
+              | _ -> LocalIdMap.remove out_id in_fact.replacements);
+          }
+      | Store (store_id, store_val) ->
+          { in_fact with known_store = Some (store_id, store_val) }
+      | StoreEmptyTable _ -> { in_fact with known_store = None }
+      | StoreClosure _ -> { in_fact with known_store = None }
+      | GetField _ -> in_fact
+      | GetIndex _ -> in_fact
+      | NumberConstant _ -> in_fact
+      | BoolConstant _ -> in_fact
+      | StringConstant _ -> in_fact
+      | NilConstant -> in_fact
+      | Call _ -> { in_fact with known_store = None }
+      | UnaryOp _ -> in_fact
+      | BinaryOp _ -> in_fact
+      | Phi branches ->
+          {
+            (* it's probably possible to preserve more information here *)
+            in_fact
+            with
+            known_store = None;
+          })
+    (fun terminator in_fact -> in_fact)
+
+let instruction_map_local_ids (f : Ir.local_id -> Ir.local_id)
+    (instruction : Ir.instruction) : Ir.instruction =
+  match (instruction : Ir.instruction) with
+  | Ir.Alloc -> instruction
+  | Ir.GetGlobal _ -> instruction
+  | Ir.Load var_id -> Ir.Load (f var_id)
+  | Ir.Store (var_id, val_id) -> Ir.Store (f var_id, f val_id)
+  | Ir.StoreEmptyTable var_id -> Ir.StoreEmptyTable (f var_id)
+  | Ir.StoreClosure (var_id, closure_id, capture_ids) ->
+      Ir.StoreClosure (f var_id, closure_id, List.map f capture_ids)
+  | Ir.GetField (var_id, field_name, create_if_missing) ->
+      Ir.GetField (f var_id, field_name, create_if_missing)
+  | Ir.GetIndex (var_id, index_id, create_if_missing) ->
+      Ir.GetIndex (f var_id, f index_id, create_if_missing)
+  | Ir.NumberConstant _ -> instruction
+  | Ir.BoolConstant _ -> instruction
+  | Ir.StringConstant _ -> instruction
+  | Ir.NilConstant -> instruction
+  | Ir.Call (closure_id, arg_ids) -> Ir.Call (f closure_id, List.map f arg_ids)
+  | Ir.UnaryOp (op, arg_id) -> Ir.UnaryOp (op, f arg_id)
+  | Ir.BinaryOp (left_id, op, right_id) ->
+      Ir.BinaryOp (f left_id, op, f right_id)
+  | Ir.Phi branches ->
+      Ir.Phi (List.map (fun (label, id) -> (label, f id)) branches)
+
+let terminator_map_local_ids (f : Ir.local_id -> Ir.local_id)
+    (terminator : Ir.terminator) : Ir.terminator =
+  match (terminator : Ir.terminator) with
+  | Ir.Ret (Some id) -> Ir.Ret (Some (f id))
+  | Ir.Ret None -> terminator
+  | Ir.Br _ -> terminator
+  | Ir.Cbr (val_id, l_true, l_false) -> Ir.Cbr (f val_id, l_true, l_false)
+
+let cfg_map_blocks (f : Ir.block -> Ir.block) (cfg : Ir.cfg) : Ir.cfg =
+  {
+    entry = f cfg.entry;
+    named = List.map (fun (id, block) -> (id, f block)) cfg.named;
+  }
+
+let bypass_redundant_loads (cfg : Ir.cfg) : Ir.cfg =
+  let module FlowAnalysis =
+    Graph.Fixpoint.Make
+      (G)
+      (struct
+        type vertex = G.E.vertex
+        type edge = G.E.t
+        type g = G.t
+        type data = fact
+
+        let direction = Graph.Fixpoint.Forward
+        let equal = ( = )
+        let join = join
+        let analyze = flow_function_of_cfg cfg
+      end)
+  in
+  let get_fact =
+    FlowAnalysis.analyze (fun _ ->
+        { known_store = Some (4, 8); replacements = LocalIdMap.empty })
+    @@ flow_graph_of_cfg cfg
+  in
+  let get_arg_mapping instruction_id =
+    let in_fact = get_fact (Before, instruction_id) in
+    fun id ->
+      LocalIdMap.find_opt id in_fact.replacements |> Option.value ~default:id
+  in
+  let temp_fact = get_fact (After, 3) in
+  Printf.printf "%s\n" @@ show_fact temp_fact;
+  Printf.printf "%s\n" @@ show_fact
+  @@ flow_function_of_cfg cfg ((Before, 3), (After, 3)) temp_fact;
+  let convert_block (block : Ir.block) : Ir.block =
+    {
+      instructions =
+        List.map
+          (fun (instruction_id, instruction) ->
+            ( instruction_id,
+              instruction_map_local_ids
+                (get_arg_mapping instruction_id)
+                instruction ))
+          block.instructions;
+      terminator =
+        (let terminator_id, terminator = block.terminator in
+         ( terminator_id,
+           terminator_map_local_ids (get_arg_mapping terminator_id) terminator
+         ));
+    }
+  in
+  cfg_map_blocks convert_block cfg
 
 type stream_el =
   | L of Ir.label
@@ -500,7 +661,8 @@ let () =
     List.find (fun (d : Ir.fun_def) -> d.name == compiled_fun_name) fun_defs
   in
   Printf.printf "%s\n" @@ Ir.show_fun_def target_fun_def;
-  let flow_graph = flow_graph_of_cfg target_fun_def.cfg in
+  let optimized_cfg = bypass_redundant_loads target_fun_def.cfg in
+  Printf.printf "%s\n" @@ Ir.show_cfg optimized_cfg;
   ()
 (* let _, result = compile_statements Ctxt.empty None statements in
    Printf.printf "%s\n" @@ show_stream @@ List.rev result *)
