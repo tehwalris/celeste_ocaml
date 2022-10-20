@@ -10,6 +10,22 @@ module G = Graph.Imperative.Digraph.Concrete (struct
   let equal = ( = )
 end)
 
+module FlowGraphDot = Graph.Graphviz.Dot (struct
+  include G
+
+  let edge_attributes _ = []
+  let default_edge_attributes _ = []
+  let get_subgraph _ = None
+  let vertex_attributes _ = [ `Shape `Box ]
+
+  let vertex_name (side, id) =
+    let side_string = match side with Before -> "Before" | After -> "After" in
+    Printf.sprintf "\"(%s, %d)\"" side_string id
+
+  let default_vertex_attributes _ = []
+  let graph_attributes _ = []
+end)
+
 let targets_of_terminator (t : Ir.terminator) : Ir.label list =
   match t with
   | Ir.Ret _ -> []
@@ -661,6 +677,8 @@ let () =
     List.find (fun (d : Ir.fun_def) -> d.name == compiled_fun_name) fun_defs
   in
   Printf.printf "%s\n" @@ Ir.show_fun_def target_fun_def;
+  FlowGraphDot.output_graph (open_out "flow_graph.dot")
+  @@ flow_graph_of_cfg target_fun_def.cfg;
   let optimized_cfg = bypass_redundant_loads target_fun_def.cfg in
   Printf.printf "%s\n" @@ Ir.show_cfg optimized_cfg;
   ()
