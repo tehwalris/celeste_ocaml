@@ -872,12 +872,15 @@ let () =
     | Slist statements -> statements
     | _ -> failwith "expected SList"
   in
-  let target_fun_name = "kill_player" in
+  let target_fun_name = "create_hair" in
   let target_fun_body =
     Option.get
     @@ List.find_map
          (function
            | Function (FNlist [ Ident name ], fun_body)
+             when name = target_fun_name ->
+               Some fun_body
+           | Assign (Elist [ Ident name ], Elist [ FunctionE fun_body ])
              when name = target_fun_name ->
                Some fun_body
            | _ -> None)
