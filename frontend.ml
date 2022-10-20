@@ -75,17 +75,27 @@ module LocalIdMap = Map.Make (struct
   let compare = Stdlib.compare
 end)
 
+module LocalIdSet = Set.Make (struct
+  type t = Ir.local_id
+
+  let compare = Stdlib.compare
+end)
+
 type fact = {
-  known_store : (Ir.local_id * Ir.local_id) option;
+  potentially_aliased : LocalIdSet.t;
+  known_stores : Ir.local_id LocalIdMap.t;
   replacements : Ir.local_id LocalIdMap.t;
 }
 
 let show_fact (fact : fact) : string =
-  Printf.sprintf "{ known_store = %s; replacements = %s }"
-    (match fact.known_store with
-    | Some (a, b) ->
-        Printf.sprintf "Some (%s, %s)" (Ir.show_local_id a) (Ir.show_local_id b)
-    | None -> "None")
+  Printf.sprintf
+    "{ potentially_aliased: [ %s ]; known_store = %s; replacements = [ %s ] }"
+    (LocalIdSet.elements fact.potentially_aliased
+    |> List.map string_of_int |> String.concat "; ")
+    (LocalIdMap.bindings fact.known_stores
+    |> List.map (fun (a, b) ->
+           Printf.sprintf "(%s, %s)" (Ir.show_local_id a) (Ir.show_local_id b))
+    |> String.concat "; ")
     (LocalIdMap.bindings fact.replacements
     |> List.map (fun (a, b) ->
            Printf.sprintf "(%s, %s)" (Ir.show_local_id a) (Ir.show_local_id b))
@@ -124,55 +134,124 @@ let make_flow_function
     | _ -> failwith "flow through node went in unexpected direction"
 
 let join (a : fact option) (b : fact option) : fact option =
+  let union_same_values =
+    LocalIdMap.union (fun _ a b -> if a == b then Some a else None)
+  in
   match (a, b) with
   | Some a, Some b ->
       Some
         {
-          known_store =
-            (if a.known_store = b.known_store then a.known_store else None);
-          replacements =
-            LocalIdMap.union
-              (fun _ a b -> if a == b then Some a else None)
-              a.replacements b.replacements;
+          potentially_aliased =
+            LocalIdSet.union a.potentially_aliased b.potentially_aliased;
+          known_stores = union_same_values a.known_stores b.known_stores;
+          replacements = union_same_values a.replacements b.replacements;
         }
   | Some a, None -> Some a
   | None, Some b -> Some b
   | None, None -> None
 
+let flow_instruction_aliasing
+    ((out_id : Ir.local_id), (instruction : Ir.instruction))
+    (in_aliased : LocalIdSet.t) : LocalIdSet.t =
+  let no_alias_out = LocalIdSet.remove out_id in_aliased in
+  let alias_out = LocalIdSet.add out_id in_aliased in
+  match instruction with
+  | Alloc -> no_alias_out
+  | GetGlobal _ -> alias_out
+  | Load load_id -> alias_out
+  | Store (store_id, store_val) -> LocalIdSet.add store_val no_alias_out
+  | StoreEmptyTable _ -> no_alias_out
+  | StoreClosure (store_id, closure_id, capture_ids) ->
+      LocalIdSet.add_seq (List.to_seq capture_ids) no_alias_out
+  | GetField _ -> alias_out
+  | GetIndex _ -> alias_out
+  | NumberConstant _ -> no_alias_out
+  | BoolConstant _ -> no_alias_out
+  | StringConstant _ -> no_alias_out
+  | NilConstant -> no_alias_out
+  | Call (_, arg_ids) -> LocalIdSet.add_seq (List.to_seq arg_ids) alias_out
+  | UnaryOp _ -> no_alias_out
+  | BinaryOp _ -> no_alias_out
+  | Phi branches ->
+      if
+        branches
+        |> List.find_opt (fun (_, id) -> LocalIdSet.mem id in_aliased)
+        |> Option.is_some
+      then LocalIdSet.add out_id no_alias_out
+      else no_alias_out
+
 let flow_function_of_cfg =
   make_flow_function
     (fun (out_id, instruction) in_fact ->
+      let base_out_fact =
+        {
+          in_fact with
+          potentially_aliased =
+            flow_instruction_aliasing (out_id, instruction)
+              in_fact.potentially_aliased;
+          replacements = LocalIdMap.remove out_id in_fact.replacements;
+        }
+      in
+      let remove_potentially_aliased_stores
+          (known_stores : Ir.local_id LocalIdMap.t) =
+        LocalIdMap.filter
+          (fun id _ ->
+            not (LocalIdSet.mem id base_out_fact.potentially_aliased))
+          known_stores
+      in
       match instruction with
-      | Alloc -> in_fact
-      | GetGlobal _ -> in_fact
+      | Alloc -> base_out_fact
+      | GetGlobal _ -> base_out_fact
       | Load load_id ->
           {
-            in_fact with
+            base_out_fact with
             replacements =
-              (match in_fact.known_store with
-              | Some (store_id, store_val) when store_id = load_id ->
-                  LocalIdMap.add out_id store_val in_fact.replacements
-              | _ -> LocalIdMap.remove out_id in_fact.replacements);
+              (match LocalIdMap.find_opt load_id in_fact.known_stores with
+              | Some store_val ->
+                  LocalIdMap.add out_id store_val base_out_fact.replacements
+              | _ -> base_out_fact.replacements);
           }
       | Store (store_id, store_val) ->
-          { in_fact with known_store = Some (store_id, store_val) }
-      | StoreEmptyTable _ -> { in_fact with known_store = None }
-      | StoreClosure _ -> { in_fact with known_store = None }
-      | GetField _ -> in_fact
-      | GetIndex _ -> in_fact
-      | NumberConstant _ -> in_fact
-      | BoolConstant _ -> in_fact
-      | StringConstant _ -> in_fact
-      | NilConstant -> in_fact
-      | Call _ -> { in_fact with known_store = None }
-      | UnaryOp _ -> in_fact
-      | BinaryOp _ -> in_fact
+          {
+            base_out_fact with
+            known_stores =
+              base_out_fact.known_stores
+              |> LocalIdMap.add store_id store_val
+              |> remove_potentially_aliased_stores;
+          }
+      | StoreEmptyTable _ ->
+          {
+            base_out_fact with
+            known_stores =
+              remove_potentially_aliased_stores base_out_fact.known_stores;
+          }
+      | StoreClosure _ ->
+          {
+            base_out_fact with
+            known_stores =
+              remove_potentially_aliased_stores base_out_fact.known_stores;
+          }
+      | GetField _ -> base_out_fact
+      | GetIndex _ -> base_out_fact
+      | NumberConstant _ -> base_out_fact
+      | BoolConstant _ -> base_out_fact
+      | StringConstant _ -> base_out_fact
+      | NilConstant -> base_out_fact
+      | Call (_, arg_ids) ->
+          {
+            base_out_fact with
+            known_stores =
+              remove_potentially_aliased_stores base_out_fact.known_stores;
+          }
+      | UnaryOp _ -> base_out_fact
+      | BinaryOp _ -> base_out_fact
       | Phi branches ->
           {
             (* it's probably possible to preserve more information here *)
-            in_fact
+            base_out_fact
             with
-            known_store = None;
+            known_stores =
+              remove_potentially_aliased_stores base_out_fact.known_stores;
           })
     (fun terminator in_fact -> in_fact)
 
@@ -234,7 +313,12 @@ let bypass_redundant_loads (cfg : Ir.cfg) : Ir.cfg =
   let g = flow_graph_of_cfg cfg in
   let init v =
     if G.in_degree g v = 0 then
-      Some { known_store = None; replacements = LocalIdMap.empty }
+      Some
+        {
+          potentially_aliased = LocalIdSet.empty;
+          known_stores = LocalIdMap.empty;
+          replacements = LocalIdMap.empty;
+        }
     else None
   in
   let get_fact = FlowAnalysis.analyze init g in
@@ -651,7 +735,7 @@ let () =
     | Slist statements -> statements
     | _ -> failwith "expected SList"
   in
-  let target_fun_name = "draw_object" in
+  let target_fun_name = "draw_time" in
   let target_fun_body =
     Option.get
     @@ List.find_map
