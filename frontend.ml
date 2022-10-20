@@ -452,7 +452,8 @@ let remove_dead_instructions (cfg : Ir.cfg) : Ir.cfg =
   in
   let instruction_is_live (out_id, instruction) =
     let live_variables = Option.get @@ live_variable_analysis (After, out_id) in
-    instruction_live_if_output_unused instruction ever_aliased_variables
+    instruction_live_if_output_unused instruction
+      (LocalIdSet.union live_variables ever_aliased_variables)
     || LocalIdSet.mem out_id live_variables
   in
   cfg_map_blocks
