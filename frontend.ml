@@ -194,6 +194,20 @@ let known_stores_join =
         replacements = union_same_values a.replacements b.replacements;
       })
 
+let lift_equal (equal : 'a -> 'a -> bool) (a : 'a option) (b : 'a option) : bool
+    =
+  match (a, b) with
+  | Some a, Some b -> equal a b
+  | Some _, None -> false
+  | None, Some _ -> false
+  | None, None -> true
+
+let known_stores_equal =
+  lift_equal (fun a b ->
+      LocalIdSet.equal a.potentially_aliased b.potentially_aliased
+      && LocalIdMap.equal (fun _ _ -> true) a.known_stores b.known_stores
+      && LocalIdMap.equal (fun _ _ -> true) a.replacements b.replacements)
+
 let flow_instruction_aliasing
     ((out_id : Ir.local_id), (instruction : Ir.instruction))
     (in_aliased : LocalIdSet.t) : LocalIdSet.t =
@@ -338,7 +352,7 @@ let bypass_redundant_loads (cfg : Ir.cfg) : Ir.cfg =
         type data = fact option
 
         let direction = Graph.Fixpoint.Forward
-        let equal = ( = )
+        let equal = known_stores_equal
         let join = known_stores_join
         let analyze = flow_function_of_cfg cfg
       end)
@@ -411,7 +425,7 @@ let remove_dead_instructions (cfg : Ir.cfg) : Ir.cfg =
         type data = LocalIdSet.t option
 
         let direction = Graph.Fixpoint.Forward
-        let equal = ( = )
+        let equal = lift_equal LocalIdSet.equal
         let join = lift_join LocalIdSet.union
 
         let analyze =
@@ -430,7 +444,7 @@ let remove_dead_instructions (cfg : Ir.cfg) : Ir.cfg =
         type data = LocalIdSet.t option
 
         let direction = Graph.Fixpoint.Backward
-        let equal = ( = )
+        let equal = lift_equal LocalIdSet.equal
         let join = lift_join LocalIdSet.union
 
         let analyze =
@@ -858,7 +872,7 @@ let () =
     | Slist statements -> statements
     | _ -> failwith "expected SList"
   in
-  let target_fun_name = "draw_time" in
+  let target_fun_name = "kill_player" in
   let target_fun_body =
     Option.get
     @@ List.find_map
@@ -896,7 +910,7 @@ let () =
   let optimized_cfg =
     iterate_until_stable
       (fun cfg ->
-        Printf.printf "Optimizing\n";
+        Printf.printf "Optimizing\n%!";
         optimize cfg)
       target_fun_def.cfg
   in
