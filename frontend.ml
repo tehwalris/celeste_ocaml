@@ -75,10 +75,26 @@ module LocalIdMap = Map.Make (struct
   let compare = Stdlib.compare
 end)
 
+type fact = {
+  known_store : (Ir.local_id * Ir.local_id) option;
+  replacements : Ir.local_id LocalIdMap.t;
+}
+
+let show_fact (fact : fact) : string =
+  Printf.sprintf "{ known_store = %s; replacements = %s }"
+    (match fact.known_store with
+    | Some (a, b) ->
+        Printf.sprintf "Some (%s, %s)" (Ir.show_local_id a) (Ir.show_local_id b)
+    | None -> "None")
+    (LocalIdMap.bindings fact.replacements
+    |> List.map (fun (a, b) ->
+           Printf.sprintf "(%s, %s)" (Ir.show_local_id a) (Ir.show_local_id b))
+    |> String.concat "; ")
+
 let make_flow_function
     (instruction_flow : Ir.local_id * Ir.instruction -> 'a -> 'a)
     (terminator_flow : Ir.terminator -> 'a -> 'a) (cfg : Ir.cfg) :
-    G.E.t -> 'a -> 'a =
+    G.E.t -> 'a option -> 'a option =
   let blocks = cfg.entry :: List.map snd cfg.named in
   let instruction_flow_functions =
     List.concat_map
@@ -103,42 +119,32 @@ let make_flow_function
   fun edge ->
     match edge with
     | (Before, in_id), (After, out_id) when in_id = out_id ->
-        LocalIdMap.find in_id flow_functions
+        Option.map @@ LocalIdMap.find in_id flow_functions
     | (After, _), (Before, _) -> Fun.id
     | _ -> failwith "flow through node went in unexpected direction"
 
-type fact = {
-  known_store : (Ir.local_id * Ir.local_id) option;
-  replacements : Ir.local_id LocalIdMap.t;
-}
-
-let show_fact (fact : fact) : string =
-  Printf.sprintf "{ known_store = %s; replacements = %s }"
-    (match fact.known_store with
-    | Some (a, b) ->
-        Printf.sprintf "Some (%s, %s)" (Ir.show_local_id a) (Ir.show_local_id b)
-    | None -> "None")
-    (LocalIdMap.bindings fact.replacements
-    |> List.map (fun (a, b) ->
-           Printf.sprintf "(%s, %s)" (Ir.show_local_id a) (Ir.show_local_id b))
-    |> String.concat "; ")
-
-let join (a : fact) (b : fact) : fact =
-  {
-    known_store =
-      (if a.known_store = b.known_store then a.known_store else None);
-    replacements =
-      LocalIdMap.union
-        (fun _ a b -> if a == b then Some a else None)
-        a.replacements b.replacements;
-  }
+let join (a : fact option) (b : fact option) : fact option =
+  match (a, b) with
+  | Some a, Some b ->
+      Some
+        {
+          known_store =
+            (if a.known_store = b.known_store then a.known_store else None);
+          replacements =
+            LocalIdMap.union
+              (fun _ a b -> if a == b then Some a else None)
+              a.replacements b.replacements;
+        }
+  | Some a, None -> Some a
+  | None, Some b -> Some b
+  | None, None -> None
 
 let flow_function_of_cfg =
   make_flow_function
     (fun (out_id, instruction) in_fact ->
       match instruction with
       | Alloc -> in_fact
-      | GetGlobal _ -> { in_fact with known_store = None }
+      | GetGlobal _ -> in_fact
       | Load load_id ->
           {
             in_fact with
@@ -217,7 +223,7 @@ let bypass_redundant_loads (cfg : Ir.cfg) : Ir.cfg =
         type vertex = G.E.vertex
         type edge = G.E.t
         type g = G.t
-        type data = fact
+        type data = fact option
 
         let direction = Graph.Fixpoint.Forward
         let equal = ( = )
@@ -225,20 +231,18 @@ let bypass_redundant_loads (cfg : Ir.cfg) : Ir.cfg =
         let analyze = flow_function_of_cfg cfg
       end)
   in
-  let get_fact =
-    FlowAnalysis.analyze (fun _ ->
-        { known_store = Some (4, 8); replacements = LocalIdMap.empty })
-    @@ flow_graph_of_cfg cfg
+  let g = flow_graph_of_cfg cfg in
+  let init v =
+    if G.in_degree g v = 0 then
+      Some { known_store = None; replacements = LocalIdMap.empty }
+    else None
   in
+  let get_fact = FlowAnalysis.analyze init g in
   let get_arg_mapping instruction_id =
-    let in_fact = get_fact (Before, instruction_id) in
+    let in_fact = Option.get @@ get_fact (Before, instruction_id) in
     fun id ->
       LocalIdMap.find_opt id in_fact.replacements |> Option.value ~default:id
   in
-  let temp_fact = get_fact (After, 3) in
-  Printf.printf "%s\n" @@ show_fact temp_fact;
-  Printf.printf "%s\n" @@ show_fact
-  @@ flow_function_of_cfg cfg ((Before, 3), (After, 3)) temp_fact;
   let convert_block (block : Ir.block) : Ir.block =
     {
       instructions =
