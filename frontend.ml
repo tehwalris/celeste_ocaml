@@ -69,6 +69,45 @@ let flow_graph_of_cfg (cfg : Ir.cfg) =
     (cfg.entry :: List.map snd cfg.named);
   g
 
+let instruction_map_local_ids (f : Ir.local_id -> Ir.local_id)
+    (instruction : Ir.instruction) : Ir.instruction =
+  match (instruction : Ir.instruction) with
+  | Ir.Alloc -> instruction
+  | Ir.GetGlobal _ -> instruction
+  | Ir.Load var_id -> Ir.Load (f var_id)
+  | Ir.Store (var_id, val_id) -> Ir.Store (f var_id, f val_id)
+  | Ir.StoreEmptyTable var_id -> Ir.StoreEmptyTable (f var_id)
+  | Ir.StoreClosure (var_id, closure_id, capture_ids) ->
+      Ir.StoreClosure (f var_id, closure_id, List.map f capture_ids)
+  | Ir.GetField (var_id, field_name, create_if_missing) ->
+      Ir.GetField (f var_id, field_name, create_if_missing)
+  | Ir.GetIndex (var_id, index_id, create_if_missing) ->
+      Ir.GetIndex (f var_id, f index_id, create_if_missing)
+  | Ir.NumberConstant _ -> instruction
+  | Ir.BoolConstant _ -> instruction
+  | Ir.StringConstant _ -> instruction
+  | Ir.NilConstant -> instruction
+  | Ir.Call (closure_id, arg_ids) -> Ir.Call (f closure_id, List.map f arg_ids)
+  | Ir.UnaryOp (op, arg_id) -> Ir.UnaryOp (op, f arg_id)
+  | Ir.BinaryOp (left_id, op, right_id) ->
+      Ir.BinaryOp (f left_id, op, f right_id)
+  | Ir.Phi branches ->
+      Ir.Phi (List.map (fun (label, id) -> (label, f id)) branches)
+
+let terminator_map_local_ids (f : Ir.local_id -> Ir.local_id)
+    (terminator : Ir.terminator) : Ir.terminator =
+  match (terminator : Ir.terminator) with
+  | Ir.Ret (Some id) -> Ir.Ret (Some (f id))
+  | Ir.Ret None -> terminator
+  | Ir.Br _ -> terminator
+  | Ir.Cbr (val_id, l_true, l_false) -> Ir.Cbr (f val_id, l_true, l_false)
+
+let cfg_map_blocks (f : Ir.block -> Ir.block) (cfg : Ir.cfg) : Ir.cfg =
+  {
+    entry = f cfg.entry;
+    named = List.map (fun (id, block) -> (id, f block)) cfg.named;
+  }
+
 module LocalIdMap = Map.Make (struct
   type t = Ir.local_id
 
@@ -87,11 +126,13 @@ type fact = {
   replacements : Ir.local_id LocalIdMap.t;
 }
 
+let show_local_id_set s =
+  s |> LocalIdSet.elements |> List.map string_of_int |> String.concat "; "
+
 let show_fact (fact : fact) : string =
   Printf.sprintf
     "{ potentially_aliased: [ %s ]; known_store = %s; replacements = [ %s ] }"
-    (LocalIdSet.elements fact.potentially_aliased
-    |> List.map string_of_int |> String.concat "; ")
+    (show_local_id_set fact.potentially_aliased)
     (LocalIdMap.bindings fact.known_stores
     |> List.map (fun (a, b) ->
            Printf.sprintf "(%s, %s)" (Ir.show_local_id a) (Ir.show_local_id b))
@@ -133,22 +174,25 @@ let make_flow_function
     | (After, _), (Before, _) -> Fun.id
     | _ -> failwith "flow through node went in unexpected direction"
 
-let join (a : fact option) (b : fact option) : fact option =
-  let union_same_values =
-    LocalIdMap.union (fun _ a b -> if a == b then Some a else None)
-  in
+let lift_join (join : 'a -> 'a -> 'a) (a : 'a option) (b : 'a option) :
+    'a option =
   match (a, b) with
-  | Some a, Some b ->
-      Some
-        {
-          potentially_aliased =
-            LocalIdSet.union a.potentially_aliased b.potentially_aliased;
-          known_stores = union_same_values a.known_stores b.known_stores;
-          replacements = union_same_values a.replacements b.replacements;
-        }
+  | Some a, Some b -> Some (join a b)
   | Some a, None -> Some a
   | None, Some b -> Some b
   | None, None -> None
+
+let known_stores_join =
+  let union_same_values =
+    LocalIdMap.union (fun _ a b -> if a == b then Some a else None)
+  in
+  lift_join (fun a b ->
+      {
+        potentially_aliased =
+          LocalIdSet.union a.potentially_aliased b.potentially_aliased;
+        known_stores = union_same_values a.known_stores b.known_stores;
+        replacements = union_same_values a.replacements b.replacements;
+      })
 
 let flow_instruction_aliasing
     ((out_id : Ir.local_id), (instruction : Ir.instruction))
@@ -179,6 +223,34 @@ let flow_instruction_aliasing
         |> Option.is_some
       then LocalIdSet.add out_id no_alias_out
       else no_alias_out
+
+let flow_instruction_live_variables
+    ((out_id : Ir.local_id), (instruction : Ir.instruction))
+    (in_live : LocalIdSet.t) : LocalIdSet.t =
+  let arg_ids = ref [] in
+  let _ =
+    instruction_map_local_ids
+      (fun id ->
+        arg_ids := id :: !arg_ids;
+        id)
+      instruction
+  in
+  let arg_ids = !arg_ids in
+  in_live |> LocalIdSet.remove out_id
+  |> LocalIdSet.add_seq (List.to_seq arg_ids)
+
+let flow_terminator_live_variables (terminator : Ir.terminator)
+    (in_live : LocalIdSet.t) : LocalIdSet.t =
+  let arg_ids = ref [] in
+  let _ =
+    terminator_map_local_ids
+      (fun id ->
+        arg_ids := id :: !arg_ids;
+        id)
+      terminator
+  in
+  let arg_ids = !arg_ids in
+  in_live |> LocalIdSet.add_seq (List.to_seq arg_ids)
 
 let flow_function_of_cfg =
   make_flow_function
@@ -255,45 +327,6 @@ let flow_function_of_cfg =
           })
     (fun terminator in_fact -> in_fact)
 
-let instruction_map_local_ids (f : Ir.local_id -> Ir.local_id)
-    (instruction : Ir.instruction) : Ir.instruction =
-  match (instruction : Ir.instruction) with
-  | Ir.Alloc -> instruction
-  | Ir.GetGlobal _ -> instruction
-  | Ir.Load var_id -> Ir.Load (f var_id)
-  | Ir.Store (var_id, val_id) -> Ir.Store (f var_id, f val_id)
-  | Ir.StoreEmptyTable var_id -> Ir.StoreEmptyTable (f var_id)
-  | Ir.StoreClosure (var_id, closure_id, capture_ids) ->
-      Ir.StoreClosure (f var_id, closure_id, List.map f capture_ids)
-  | Ir.GetField (var_id, field_name, create_if_missing) ->
-      Ir.GetField (f var_id, field_name, create_if_missing)
-  | Ir.GetIndex (var_id, index_id, create_if_missing) ->
-      Ir.GetIndex (f var_id, f index_id, create_if_missing)
-  | Ir.NumberConstant _ -> instruction
-  | Ir.BoolConstant _ -> instruction
-  | Ir.StringConstant _ -> instruction
-  | Ir.NilConstant -> instruction
-  | Ir.Call (closure_id, arg_ids) -> Ir.Call (f closure_id, List.map f arg_ids)
-  | Ir.UnaryOp (op, arg_id) -> Ir.UnaryOp (op, f arg_id)
-  | Ir.BinaryOp (left_id, op, right_id) ->
-      Ir.BinaryOp (f left_id, op, f right_id)
-  | Ir.Phi branches ->
-      Ir.Phi (List.map (fun (label, id) -> (label, f id)) branches)
-
-let terminator_map_local_ids (f : Ir.local_id -> Ir.local_id)
-    (terminator : Ir.terminator) : Ir.terminator =
-  match (terminator : Ir.terminator) with
-  | Ir.Ret (Some id) -> Ir.Ret (Some (f id))
-  | Ir.Ret None -> terminator
-  | Ir.Br _ -> terminator
-  | Ir.Cbr (val_id, l_true, l_false) -> Ir.Cbr (f val_id, l_true, l_false)
-
-let cfg_map_blocks (f : Ir.block -> Ir.block) (cfg : Ir.cfg) : Ir.cfg =
-  {
-    entry = f cfg.entry;
-    named = List.map (fun (id, block) -> (id, f block)) cfg.named;
-  }
-
 let bypass_redundant_loads (cfg : Ir.cfg) : Ir.cfg =
   let module FlowAnalysis =
     Graph.Fixpoint.Make
@@ -306,7 +339,7 @@ let bypass_redundant_loads (cfg : Ir.cfg) : Ir.cfg =
 
         let direction = Graph.Fixpoint.Forward
         let equal = ( = )
-        let join = join
+        let join = known_stores_join
         let analyze = flow_function_of_cfg cfg
       end)
   in
@@ -345,6 +378,94 @@ let bypass_redundant_loads (cfg : Ir.cfg) : Ir.cfg =
     }
   in
   cfg_map_blocks convert_block cfg
+
+let instruction_live_if_output_unused (instruction : Ir.instruction)
+    (aliased_variables : LocalIdSet.t) : bool =
+  match instruction with
+  | Alloc -> false
+  | GetGlobal _ -> false
+  | Load _ -> false
+  | Store (store_id, _) -> LocalIdSet.mem store_id aliased_variables
+  | StoreEmptyTable store_id -> LocalIdSet.mem store_id aliased_variables
+  | StoreClosure (store_id, closure_id, capture_ids) ->
+      LocalIdSet.mem store_id aliased_variables
+  | GetField (_, _, create_if_missing) -> create_if_missing
+  | GetIndex (_, _, create_if_missing) -> create_if_missing
+  | NumberConstant _ -> false
+  | BoolConstant _ -> false
+  | StringConstant _ -> false
+  | NilConstant -> false
+  | Call _ -> true
+  | UnaryOp _ -> false
+  | BinaryOp _ -> false
+  | Phi _ -> false
+
+let remove_dead_instructions (cfg : Ir.cfg) : Ir.cfg =
+  let module AliasAnalysis =
+    Graph.Fixpoint.Make
+      (G)
+      (struct
+        type vertex = G.E.vertex
+        type edge = G.E.t
+        type g = G.t
+        type data = LocalIdSet.t option
+
+        let direction = Graph.Fixpoint.Forward
+        let equal = ( = )
+        let join = lift_join LocalIdSet.union
+
+        let analyze =
+          make_flow_function flow_instruction_aliasing
+            (fun _ in_fact -> in_fact)
+            cfg
+      end)
+  in
+  let module LiveVariableAnalysis =
+    Graph.Fixpoint.Make
+      (G)
+      (struct
+        type vertex = G.E.vertex
+        type edge = G.E.t
+        type g = G.t
+        type data = LocalIdSet.t option
+
+        let direction = Graph.Fixpoint.Backward
+        let equal = ( = )
+        let join = lift_join LocalIdSet.union
+
+        let analyze =
+          make_flow_function flow_instruction_live_variables
+            flow_terminator_live_variables cfg
+      end)
+  in
+  let g = flow_graph_of_cfg cfg in
+  let alias_analysis =
+    AliasAnalysis.analyze (fun _ -> Some LocalIdSet.empty) g
+  in
+  let ever_aliased_variables =
+    G.fold_vertex
+      (fun v -> LocalIdSet.union @@ Option.get @@ alias_analysis v)
+      g LocalIdSet.empty
+  in
+  let live_variable_analysis =
+    LiveVariableAnalysis.analyze (fun v -> Some LocalIdSet.empty) g
+  in
+  let instruction_is_live (out_id, instruction) =
+    let live_variables = Option.get @@ live_variable_analysis (After, out_id) in
+    instruction_live_if_output_unused instruction ever_aliased_variables
+    || LocalIdSet.mem out_id live_variables
+  in
+  cfg_map_blocks
+    (fun (block : Ir.block) ->
+      {
+        block with
+        instructions = List.filter instruction_is_live block.instructions;
+      })
+    cfg
+
+let rec iterate_until_stable (f : 'a -> 'a) (x : 'a) : 'a =
+  let x' = f x in
+  if x' = x then x else iterate_until_stable f x'
 
 type stream_el =
   | L of Ir.label
@@ -499,6 +620,7 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
       in
       (inner_id, inner_stream >@ result_stream)
   | Binop (op, left_expr, right_expr) ->
+      (* TODO "and" and "or" must be handled separately, because they short circuit*)
       let left_id, left_stream = compile_rhs_expression c left_expr in
       let right_id, right_stream = compile_rhs_expression c right_expr in
       let result_id, binop_stream =
@@ -767,7 +889,16 @@ let () =
   Printf.printf "%s\n" @@ Ir.show_fun_def target_fun_def;
   FlowGraphDot.output_graph (open_out "flow_graph.dot")
   @@ flow_graph_of_cfg target_fun_def.cfg;
-  let optimized_cfg = bypass_redundant_loads target_fun_def.cfg in
+  let optimize cfg =
+    cfg |> bypass_redundant_loads |> remove_dead_instructions
+  in
+  let optimized_cfg =
+    iterate_until_stable
+      (fun cfg ->
+        Printf.printf "Optimizing\n";
+        optimize cfg)
+      target_fun_def.cfg
+  in
   Printf.printf "%s\n" @@ Ir.show_cfg optimized_cfg;
   ()
 (* let _, result = compile_statements Ctxt.empty None statements in
