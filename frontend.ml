@@ -362,6 +362,7 @@ let bypass_redundant_loads (cfg : Ir.cfg) : Ir.cfg =
     if G.in_degree g v = 0 then
       Some
         {
+          (* TODO function parameters may be aliased *)
           potentially_aliased = LocalIdSet.empty;
           known_stores = LocalIdMap.empty;
           replacements = LocalIdMap.empty;
@@ -454,6 +455,7 @@ let remove_dead_instructions (cfg : Ir.cfg) : Ir.cfg =
   in
   let g = flow_graph_of_cfg cfg in
   let alias_analysis =
+    (* TODO function parameters may be aliased *)
     AliasAnalysis.analyze (fun _ -> Some LocalIdSet.empty) g
   in
   let ever_aliased_variables =
