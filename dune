@@ -2,18 +2,12 @@
  (names celeste_ocaml frontend)
  (libraries
   bigarray
-  gmp
-  apron
-  apron.octD
   lua_parser.lib
   batteries
-  landmarks
   tqdm
   ocamlgraph)
  (preprocess
   (pps
    ppx_deriving.show
    ppx_deriving.eq
-   ppx_deriving.ord
-   landmarks-ppx
-   --auto)))
+   ppx_deriving.ord)))
