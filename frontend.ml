@@ -636,8 +636,11 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
         gen_id_and_stream (UnaryOp (String.trim op, inner_id))
       in
       (inner_id, inner_stream >@ result_stream)
+  | Binop ("and", left_expr, right_expr) ->
+      compile_and_or true c left_expr right_expr
+  | Binop ("or", left_expr, right_expr) ->
+      compile_and_or false c left_expr right_expr
   | Binop (op, left_expr, right_expr) ->
-      (* TODO "and" and "or" must be handled separately, because they short circuit*)
       let left_id, left_stream = compile_rhs_expression c left_expr in
       let right_id, right_stream = compile_rhs_expression c right_expr in
       let result_id, binop_stream =
@@ -662,6 +665,30 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
       else
         let rhs_id = gen_local_id () in
         (rhs_id, lhs_stream >:: I (rhs_id, Ir.Load lhs_id))
+
+and compile_and_or (is_and: bool) (c: Ctxt.t) (left_expr: ast) (right_expr: ast) : Ir.local_id * stream =
+  let left_id, left_stream = compile_rhs_expression c left_expr in
+  let right_id, right_stream = compile_rhs_expression c right_expr in
+  let result_id = gen_local_id () in
+  let left_label = gen_label "and_or_left" in
+  let right_label = gen_label "and_or_right" in
+  let continue_label = gen_label "and_or_continue" in
+  let join_label = gen_label "and_or_join" in
+  let (true_label, false_label) =
+    if is_and then (continue_label, join_label)
+    else (join_label, continue_label) in
+  (result_id, []
+    >@ left_stream
+    >:: T (gen_local_id (), Ir.Br left_label)
+    >:: L left_label
+    >:: T (gen_local_id (), Ir.Cbr (left_id, true_label, false_label))
+    >:: L continue_label
+    >@ right_stream
+    >:: T (gen_local_id (), Ir.Br right_label)
+    >:: L right_label
+    >:: T (gen_local_id (), Ir.Br join_label)
+    >:: L join_label
+    >:: I (result_id, Ir.Phi [(left_label, left_id); (right_label, right_id)]))
 
 and compile_closure (c : Ctxt.t) (fun_ast : ast) (name_hint : string option) :
     Ir.local_id * stream =
@@ -874,7 +901,7 @@ let () =
     | Slist statements -> statements
     | _ -> failwith "expected SList"
   in
-  let target_fun_name = "create_hair" in
+  let target_fun_name = "and_test" in
   let target_fun_body =
     Option.get
     @@ List.find_map
