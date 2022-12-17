@@ -199,7 +199,7 @@ and compile_and_or (is_and : bool) (c : Ctxt.t) (left_expr : ast)
     if is_and then (continue_label, join_label) else (join_label, continue_label)
   in
   ( result_id,
-    [] >@ left_stream
+    left_stream
     >:: T (gen_local_id (), Ir.Br left_label)
     >:: L left_label
     >:: T (gen_local_id (), Ir.Cbr (left_id, true_label, false_label))
@@ -374,23 +374,27 @@ and compile_statement (c : Ctxt.t) (break_label : Ir.label option) (stmt : ast)
       let step_id = gen_local_id () in
       let next_val_id = gen_local_id () in
       let continue_id = gen_local_id () in
-      let init_label = gen_label "for_init" in
+      let init_end_label = gen_label "for_init_end" in
       let head_label = gen_label "for_head" in
-      let body_label = gen_label "for_body" in
+      let body_start_label = gen_label "for_body_start" in
+      let body_end_label = gen_label "for_body_end" in
       let join_label = gen_label "for_join" in
       ( c,
-        []
-        >:: T (gen_local_id (), Ir.Br init_label)
-        >:: L init_label >@ start_code >@ end_code
+        start_code >@ end_code
         >:: I (step_id, Ir.NumberConstant (Pico_number.of_int 1))
+        >:: L init_end_label
         >:: T (gen_local_id (), Ir.Br head_label)
         >:: L head_label
         >:: I
               ( val_id,
-                Ir.Phi [ (init_label, start_id); (body_label, next_val_id) ] )
+                Ir.Phi
+                  [ (init_end_label, start_id); (body_end_label, next_val_id) ]
+              )
         >:: I (continue_id, Ir.BinaryOp (val_id, "<=", end_id))
-        >:: T (gen_local_id (), Ir.Cbr (continue_id, body_label, join_label))
-        >:: L body_label
+        >:: T
+              ( gen_local_id (),
+                Ir.Cbr (continue_id, body_start_label, join_label) )
+        >:: L body_start_label
         >:: I (var_id, Ir.Alloc)
         >:: I (gen_local_id (), Ir.Store (var_id, val_id))
         >@ snd
@@ -398,6 +402,7 @@ and compile_statement (c : Ctxt.t) (break_label : Ir.label option) (stmt : ast)
                 (Ctxt.add c var_name var_id)
                 (Some join_label) statements
         >:: I (next_val_id, Ir.BinaryOp (val_id, "+", step_id))
+        >:: L body_end_label
         >:: T (gen_local_id (), Ir.Br head_label)
         >:: L join_label )
   | Break -> (c, [ T (gen_local_id (), Ir.Br (Option.get break_label)) ])
