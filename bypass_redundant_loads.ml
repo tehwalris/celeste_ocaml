@@ -19,7 +19,6 @@ let show_fact (fact : fact) : string =
            Printf.sprintf "(%s, %s)" (Ir.show_local_id a) (Ir.show_local_id b))
     |> String.concat "; ")
 
-
 let known_stores_join =
   let union_same_values =
     Ir.LocalIdMap.union (fun _ a b -> if a == b then Some a else None)
@@ -37,8 +36,6 @@ let known_stores_equal =
       Ir.LocalIdSet.equal a.potentially_aliased b.potentially_aliased
       && Ir.LocalIdMap.equal (fun _ _ -> true) a.known_stores b.known_stores
       && Ir.LocalIdMap.equal (fun _ _ -> true) a.replacements b.replacements)
-
-
 
 let flow_function_of_cfg =
   Flow.make_flow_function
@@ -97,7 +94,7 @@ let flow_function_of_cfg =
       | BoolConstant _ -> base_out_fact
       | StringConstant _ -> base_out_fact
       | NilConstant -> base_out_fact
-      | Call (_, arg_ids) ->
+      | Call (_, _arg_ids) ->
           {
             base_out_fact with
             known_stores =
@@ -105,7 +102,7 @@ let flow_function_of_cfg =
           }
       | UnaryOp _ -> base_out_fact
       | BinaryOp _ -> base_out_fact
-      | Phi branches ->
+      | Phi _branches ->
           {
             (* it's probably possible to preserve more information here *)
             base_out_fact
@@ -113,7 +110,7 @@ let flow_function_of_cfg =
             known_stores =
               remove_potentially_aliased_stores base_out_fact.known_stores;
           })
-    (fun terminator in_fact -> in_fact)
+    (fun _terminator in_fact -> in_fact)
 
 let bypass_redundant_loads (cfg : Ir.cfg) : Ir.cfg =
   let module FlowAnalysis =
@@ -156,14 +153,15 @@ let bypass_redundant_loads (cfg : Ir.cfg) : Ir.cfg =
           (fun (instruction_id, instruction) ->
             ( instruction_id,
               Ir.instruction_map_local_ids
-              (get_arg_mapping instruction_id)
-              instruction ))
-        block.instructions;
-    terminator =
-      (let terminator_id, terminator = block.terminator in
-        ( terminator_id,
-          Ir.terminator_map_local_ids (get_arg_mapping terminator_id) terminator
-        ));
-  }
-in
-Ir.cfg_map_blocks convert_block cfg
+                (get_arg_mapping instruction_id)
+                instruction ))
+          block.instructions;
+      terminator =
+        (let terminator_id, terminator = block.terminator in
+         ( terminator_id,
+           Ir.terminator_map_local_ids
+             (get_arg_mapping terminator_id)
+             terminator ));
+    }
+  in
+  Ir.cfg_map_blocks convert_block cfg

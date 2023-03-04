@@ -6,10 +6,10 @@ let flow_instruction_aliasing
   match instruction with
   | Alloc -> no_alias_out
   | GetGlobal _ -> alias_out
-  | Load load_id -> alias_out
-  | Store (store_id, store_val) -> Ir.LocalIdSet.add store_val no_alias_out
+  | Load _load_id -> alias_out
+  | Store (_store_id, store_val) -> Ir.LocalIdSet.add store_val no_alias_out
   | StoreEmptyTable _ -> no_alias_out
-  | StoreClosure (store_id, closure_id, capture_ids) ->
+  | StoreClosure (_store_id, _closure_id, capture_ids) ->
       Ir.LocalIdSet.add_seq (List.to_seq capture_ids) no_alias_out
   | GetField _ -> alias_out
   | GetIndex _ -> alias_out

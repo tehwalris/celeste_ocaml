@@ -8,7 +8,7 @@ let instruction_live_if_output_unused (instruction : Ir.instruction)
   | Load _ -> false
   | Store (store_id, _) -> Ir.LocalIdSet.mem store_id aliased_variables
   | StoreEmptyTable store_id -> Ir.LocalIdSet.mem store_id aliased_variables
-  | StoreClosure (store_id, closure_id, capture_ids) ->
+  | StoreClosure (store_id, _closure_id, _capture_ids) ->
       Ir.LocalIdSet.mem store_id aliased_variables
   | GetField (_, _, create_if_missing) -> create_if_missing
   | GetIndex (_, _, create_if_missing) -> create_if_missing
@@ -70,7 +70,7 @@ let remove_dead_instructions (cfg : Ir.cfg) : Ir.cfg =
       g Ir.LocalIdSet.empty
   in
   let live_variable_analysis =
-    LiveVariableAnalysis.analyze (fun v -> Some Ir.LocalIdSet.empty) g
+    LiveVariableAnalysis.analyze (fun _ -> Some Ir.LocalIdSet.empty) g
   in
   let instruction_is_live (out_id, instruction) =
     let live_variables = Option.get @@ live_variable_analysis (After, out_id) in

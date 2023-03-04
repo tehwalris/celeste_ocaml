@@ -16,7 +16,7 @@ type stream = stream_el list [@@deriving show]
 let ( >@ ) x y = y @ x
 let ( >:: ) x y = y :: x
 
-let unsupported_ast ast default =
+let unsupported_ast ast =
   Lua_parser.Pp_lua.pp_lua ast;
   Printf.printf "\n";
   Lua_parser.Pp_ast.pp_ast_show ast;
@@ -118,7 +118,7 @@ let rec compile_lhs_expression (c : Ctxt.t) (expr : ast)
         lhs_stream
         >:: I (result_id, Ir.GetField (lhs_id, field_name, create_if_missing))
       )
-  | _ -> unsupported_ast expr (-1, [])
+  | _ -> unsupported_ast expr
 
 and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
   match expr with
@@ -155,7 +155,7 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
       let result_id, result_stream =
         gen_id_and_stream (UnaryOp (String.trim op, inner_id))
       in
-      (inner_id, inner_stream >@ result_stream)
+      (result_id, inner_stream >@ result_stream)
   | Binop ("and", left_expr, right_expr) ->
       compile_and_or true c left_expr right_expr
   | Binop ("or", left_expr, right_expr) ->
@@ -181,7 +181,7 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
         >:: I (result_id, Ir.Call (callee_id, arg_ids)) )
   | _ ->
       let lhs_id, lhs_stream = compile_lhs_expression c expr false in
-      if lhs_id == -1 then unsupported_ast expr (-1, [])
+      if lhs_id == -1 then unsupported_ast expr
       else
         let rhs_id = gen_local_id () in
         (rhs_id, lhs_stream >:: I (rhs_id, Ir.Load lhs_id))
@@ -406,7 +406,7 @@ and compile_statement (c : Ctxt.t) (break_label : Ir.label option) (stmt : ast)
         >:: T (gen_local_id (), Ir.Br head_label)
         >:: L join_label )
   | Break -> (c, [ T (gen_local_id (), Ir.Br (Option.get break_label)) ])
-  | _ -> unsupported_ast stmt (c, [])
+  | _ -> unsupported_ast stmt
 
 and compile_statements (c : Ctxt.t) (break_label : Ir.label option)
     (statements : ast list) : Ctxt.t * stream =
