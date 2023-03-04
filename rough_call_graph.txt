@@ -1,0 +1,302 @@
+- _init
+  - title_screen
+- title_screen
+  - add
+  - music
+  - load_room
+- begin_game
+  - music
+  - load_room
+- level_index
+- is_title
+  - level_index
+- player.init
+  - create_hair
+- player.update
+  - btn
+  - spikes_at
+  - kill_player
+  - is_solid
+  - is_ice
+  - init_object
+  - psfx
+  - init_object
+  - appr
+  - abs
+  - sign
+  - rnd
+  - level_index
+  - next_room
+- player.draw
+  - clamp
+  - set_hair_color
+  - draw_hair
+  - spr
+  - unset_hair_color
+- psfx
+  - sfx
+- create_hair
+  - add
+  - max
+  - min
+- set_hair_color
+  - pal
+  - flr
+- draw_hair
+  - btn
+  - foreach
+  - circfill
+- unset_hair_color
+  - pal
+- player_spawn.init
+  - sfx
+  - create_hair
+- player_spawn.update
+  - init_object
+  - sfx
+  - destroy_object
+  - init_object
+- player_spawn.draw
+  - set_hair_color
+  - draw_hair
+  - spr
+  - unset_hair_color
+- spring.init
+- spring.update
+  - collide
+  - init_object 
+  - break_fall_floor
+  - psfx
+- break_spring
+- balloon.init
+  - rnd
+- balloon.update
+  - sin
+  - psfx
+  - init_object
+  - spr
+- fall_floor.init
+- fall_floor.update
+  - check
+  - break_fall_floor
+  - psfx
+  - init_object
+  - spr
+- break_fall_floor
+  - psfx
+  - init_object
+  - collide
+  - break_spring
+- smoke.init
+  - rnd
+  - maybe
+- smoke.update
+  - destroy_object
+- fruit.init
+- fruit.update
+  - collide
+  - sfx
+  - level_index
+  - init_object
+  - destroy_object
+  - sin
+- fly_fruit.init
+- fly_fruit.update
+  - sfx
+  - appr
+  - destroy_object
+  - sin
+  - collide
+  - sfx
+  - level_index
+  - init_object
+  - destroy_object
+- fly_fruit.draw
+  - sin
+  - max
+  - sign
+  - spr
+- lifeup.init
+- lifeup.update
+  - destroy_object
+- lifeup.draw
+  - print
+- fake_wall.update
+  - collide
+  - sign
+  - sfx
+  - destroy_object
+  - init_object
+- fake_wall.draw
+  - spr
+- key.update
+  - flr
+  - sin
+  - check
+  - sfx
+  - destroy_object
+- chest.init
+- chest.update
+  - rnd
+  - sfx
+  - init_object
+  - destroy_object
+- platform.init
+- platform.update
+  - check
+  - collide
+  - move_x
+- platform.draw
+  - spr
+- message.draw
+  - check
+  - sfx
+  - sub
+  - rectfill
+  - print
+- big_chest.init
+- big_chest.draw
+  - collide
+  - is_solid
+  - music
+  - sfx
+  - init_object
+  - spr
+  - count
+  - add
+  - rnd
+  - init_object
+  - foreach
+  - line
+  - min
+- orb.init
+- orb.draw
+  - appr
+  - collide
+  - sfx
+  - destroy_object
+  - spr
+  - circfill
+  - cos
+  - sin
+- flag.init
+  - count
+- flag.draw
+  - spr
+  - rectfill
+  - print
+  - draw_time
+  - print
+  - check
+  - sfx
+- room_title.init
+- room_title.draw
+  - destroy_object
+  - rectfill
+  - print
+  - level_index
+  - draw_time
+- init_object
+  - level_index
+  - add
+- is_solid
+  - check
+  - solid_at
+- is_ice
+  - ice_at
+- collide
+  - count
+- check
+  - collide
+- move
+  - flr
+  - move_x
+  - move_y
+- move_x
+  - sign
+  - abs
+  - is_solid
+- move_y
+  - sign
+  - abs
+  - is_solid
+- destroy_object
+  - del
+- kill_player
+  - sfx
+  - destroy_object
+  - add
+  - sin
+  - cos
+  - restart_room
+- restart_room
+- next_room
+  - music
+  - load_room
+- load_room
+  - foreach
+  - mget
+  - init_object
+  - is_title
+- _update
+  - level_index
+  - music
+  - camera
+  - rnd
+  - load_room
+  - foreach
+  - move
+  - update
+  - is_title
+  - btn
+  - sfx
+  - begin_game
+  - del
+- _draw
+  - pal
+  - rectfill
+  - is_title
+  - foreach
+  - rnd
+  - map
+  - draw_object
+  - sin
+  - min
+  - del
+  - print
+  - level_index
+  - count
+  - abs
+- draw_object
+  - draw
+  - spr
+- draw_time
+  - flr
+  - rectfill
+  - print
+- clamp
+  - max
+  - min
+- appr
+  - max
+  - min
+- sign
+- maybe
+  - rnd
+- solid_at
+  - tile_flag_at
+- ice_at
+  - tile_flag_at
+- tile_flag_at
+  - max
+  - flr
+  - min
+  - fget
+  - tile_at
+- tile_at
+  - mget
+- spikes_at
+  - max
+  - flr
+  - min
+  - tile_at
