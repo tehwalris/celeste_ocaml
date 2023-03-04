@@ -300,3 +300,46 @@
   - flr
   - min
   - tile_at
+
+- init
+  - player.init
+  - player_spawn.init
+  - spring.init
+  - balloon.init
+  - fall_floor.init
+  - smoke.init
+  - fruit.init
+  - fly_fruit.init
+  - lifeup.init
+  - chest.init
+  - platform.init
+  - big_chest.init
+  - orb.init
+  - flag.init
+  - room_title.init
+- update
+  - player.update
+  - player_spawn.update
+  - spring.update
+  - balloon.update
+  - fall_floor.update
+  - smoke.update
+  - fruit.update
+  - fly_fruit.update
+  - lifeup.update
+  - fake_wall.update
+  - key.update
+  - chest.update
+  - platform.update
+- draw
+  - player.draw
+  - player_spawn.draw
+  - fly_fruit.draw
+  - lifeup.draw
+  - fake_wall.draw
+  - platform.draw
+  - message.draw
+  - big_chest.draw
+  - orb.draw
+  - flag.draw
+  - room_title.draw
