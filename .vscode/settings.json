@@ -1,4 +1,9 @@
 {
-  "nixEnvSelector.nixFile": "${workspaceRoot}/shell.nix",
-  "cSpell.words": ["pico"]
+  "cSpell.words": ["pico"],
+  "nixEnvSelector.suggestion": false,
+  "ocaml.sandbox": {
+    "kind": "opam",
+    "switch": "${workspaceFolder:celeste_ocaml}"
+  },
+  "nixEnvSelector.nixFile": "${workspaceRoot}/shell.nix"
 }

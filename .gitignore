@@ -1,4 +1,5 @@
 _build
+/_opam
 /profile.txt
 /perf.data
 /output.txt
