@@ -100,6 +100,153 @@ struct Player extends BaseObject {
 	hair: Array<Hair>
 }
 
+struct PlayerSpawnType {
+	tile: Num
+	init: Function<["player_spawn.init"]>
+	update: Function<["player_spawn.update"]>
+	draw: Function<["player_spawn.draw"]>
+}
+
+struct PlayerSpawn extends BaseObject {
+	type: PlayerSpawnType
+
+	spr: Num
+	target: Vec
+	state: Num
+	delay: Num
+}
+
+struct SpringType {
+	tile: Num
+	init: Function<["spring.init"]>
+	update: Function<["spring.update"]>
+}
+
+struct Spring extends BaseObject {
+	type: SpringType
+
+	hide_in: Num
+	hide_for: Num
+	delay: Num
+}
+
+struct BalloonType {
+	tile: Num
+	init: Function<["balloon.init"]>
+	update: Function<["balloon.update"]>
+	draw: Function<["balloon.draw"]>
+}
+
+struct Balloon extends BaseObject {
+	type: BalloonType
+
+	offset: Num
+	start: Num
+	timer: Num
+}
+
+struct FallFloorType {
+	tile: Num
+	init: Function<["fall_floor.init"]>
+	update: Function<["fall_floor.update"]>
+	draw: Function<["fall_floor.draw"]>
+}
+
+struct FallFloor extends BaseObject {
+	type: FallFloorType
+
+	state: Num
+	delay: Num
+}
+
+struct SmokeType {
+	init: Function<["smoke.init"]>
+	update: Function<["smoke.update"]>
+}
+
+struct Smoke extends BaseObject {
+	type: SmokeType
+}
+
+struct FruitType {
+	tile: Num
+	if_not_fruit: Bool
+	init: Function<["fruit.init"]>
+	update: Function<["fruit.update"]>
+}
+
+struct Fruit extends BaseObject {
+	type: FruitType
+
+	start: Num
+	off: Num
+}
+
+struct FlyFruitType {
+	tile: Num
+	if_not_fruit: Bool
+	init: Function<["fly_fruit.init"]>
+	update: Function<["fly_fruit.update"]>
+	draw: Function<["fly_fruit.draw"]>
+}
+
+struct FlyFruit extends BaseObject {
+	type: FlyFruitType
+
+	start: Num
+	fly: Bool
+	step: Num
+	sfx_delay: Num
+}
+
+struct LifeupType {
+	init: Function<["lifeup.init"]>
+	update: Function<["lifeup.update"]>
+	draw: Function<["lifeup.draw"]>
+}
+
+struct Lifeup {
+	type: LifeupType
+
+	duration: Num
+	flash: Num
+}
+
+struct FakeWallType {
+	tile: Num
+	if_not_fruit: Bool
+	init: Function<["fake_wall.init"]>
+	update: Function<["fake_wall.update"]>
+}
+
+struct FakeWall extends BaseObject {
+	type: FakeWallType
+}
+
+struct KeyType {
+	tile: Num
+	if_not_fruit: Bool
+	update: Function<["key.update"]>
+}
+
+struct Key extends BaseObject {
+	type: KeyType
+}
+
+struct ChestType {
+	tile: Num
+	if_not_fruit: Bool
+	init: Function<["chest.init"]>
+	update: Function<["chest.update"]>
+}
+
+struct Chest extends BaseObject {
+	type: ChestType
+
+	start: Num
+	timer: Num
+}
+
 globals {
 	-- initialized at start of file
 	room: Room
@@ -147,6 +294,27 @@ globals {
 	begin_game: Function<["begin_game"]>
 	level_index: Function<["level_index"]>
 	is_title: Function<["is_title"]>
+	psfx: Function<["psfx"]>
+	create_hair: Function<["create_hair"]>
+	set_hair_color: Function<["set_hair_color"]>
+	draw_hair: Function<["draw_hair"]>
+	unset_hair_color: Function<["unset_hair_color"]>
+	break_spring: Function<["break_spring"]>
+	break_fall_floor: Function<["break_fall_floor"]>
+
+	-- object types
+	player: PlayerType
+	player_spawn: PlayerSpawnType
+	spring: SpringType
+	balloon: BalloonType
+	fall_floor: FallFloorType
+	smoke: SmokeType
+	fruit: FruitType
+	fly_fruit: FlyFruitType
+	lifeup: LifeupType
+	fake_wall: FakeWallType
+	key: KeyType
+	chest: ChestType
 }
 
 room = { x=0, y=0 }
@@ -508,20 +676,34 @@ body
  end
 end
 
-create_hair=function(obj)
+create_hair=function(obj: ?)
+	unique_name "create_hair"
+body
 	obj.hair={}
 	for i=0,4 do
 		add(obj.hair,{x=obj.x,y=obj.y,size=max(1,min(2,3-i))})
 	end
 end
 
-set_hair_color=function(djump)
+set_hair_color=function(djump: Num)
+	unique_name "set_hair_color"
+body
 	pal(8,(djump==1 and 8 or djump==2 and (7+flr((frames/3)%2)*4) or 12))
 end
 
 draw_hair=function(obj,facing)
+	unique_name "draw_hair"
+	locals {
+		last: Vec
+	}
+body
 	local last={x=obj.x+4-facing*2,y=obj.y+(btn(k_down) and 4 or 3)}
 	foreach(obj.hair,function(h)
+		unique_name "draw_hair.foreach"
+		capture {
+			last: Vec
+		}
+	body
 		h.x+=(last.x-h.x)/1.5
 		h.y+=(last.y+0.5-h.y)/1.5
 		circfill(h.x,h.y,h.size,8)
@@ -530,12 +712,16 @@ draw_hair=function(obj,facing)
 end
 
 unset_hair_color=function()
+	unique_name "unset_hair_color"
+body
 	pal(8,8)
 end
 
 player_spawn = {
 	tile=1,
-	init=function(this)
+	init=function(this: PlayerSpawn)
+		unique_name "player_spawn.init"
+	body
 	 sfx(4)
 		this.spr=3
 		this.target= {x=this.x,y=this.y}
@@ -546,7 +732,9 @@ player_spawn = {
 		this.solids=false
 		create_hair(this)
 	end,
-	update=function(this)
+	update=function(this: PlayerSpawn)
+		unique_name "player_spawn.update"
+	body
 		-- jumping up
 		if this.state==0 then
 			if this.y < this.target.y+16 then
@@ -579,7 +767,9 @@ player_spawn = {
 			end
 		end
 	end,
-	draw=function(this)
+	draw=function(this: PlayerSpawn)
+		unique_name "player_spawn.draw"
+	body
 		set_hair_color(max_djump)
 		draw_hair(this,1)
 		spr(this.spr,this.x,this.y,1,1,this.flip.x,this.flip.y)
@@ -590,11 +780,19 @@ add(types,player_spawn)
 
 spring = {
 	tile=18,
-	init=function(this)
+	init=function(this: Spring)
+		unique_name "spring.init"
+	body
 		this.hide_in=0
 		this.hide_for=0
 	end,
-	update=function(this)
+	update=function(this: Spring)
+		unique_name "spring.update"
+		locals {
+			hit: ?
+			below: ?
+		}
+	body
 		if this.hide_for>0 then
 			this.hide_for-=1
 			if this.hide_for<=0 then
@@ -638,19 +836,28 @@ spring = {
 }
 add(types,spring)
 
-function break_spring(obj)
+function break_spring(obj: Spring)
+	unique_name "break_spring"
+body
 	obj.hide_in=15
 end
 
 balloon = {
 	tile=22,
-	init=function(this) 
+	init=function(this: Balloon) 
+		unique_name "balloon.init"
+	body
 		this.offset=rnd(1)
 		this.start=this.y
 		this.timer=0
 		this.hitbox={x=-1,y=-1,w=10,h=10}
 	end,
-	update=function(this) 
+	update=function(this: Balloon) 
+		unique_name "balloon.update"
+		locals {
+			hit: ?
+		}
+	body
 		if this.spr==22 then
 			this.offset+=0.01
 			this.y=this.start+sin(this.offset)*2
@@ -670,7 +877,9 @@ balloon = {
 			this.spr=22 
 		end
 	end,
-	draw=function(this)
+	draw=function(this: Balloon)
+		unique_name "balloon.draw"
+	body
 		if this.spr==22 then
 			spr(13+(this.offset*8)%3,this.x,this.y+6)
 			spr(this.spr,this.x,this.y)
@@ -681,11 +890,15 @@ add(types,balloon)
 
 fall_floor = {
 	tile=23,
-	init=function(this)
+	init=function(this: FallFloor)
+		unique_name "fall_floor.init"
+	body
 		this.state=0
 		this.solid=true
 	end,
-	update=function(this)
+	update=function(this: FallFloor)
+		unique_name "fall_floor.update"
+	body
 		-- idling
 		if this.state == 0 then
 			if this.check(player,0,-1) or this.check(player,-1,0) or this.check(player,1,0) then
@@ -710,7 +923,9 @@ fall_floor = {
 			end
 		end
 	end,
-	draw=function(this)
+	draw=function(this: FallFloor)
+		unique_name "fall_floor.draw"
+	body
 		if this.state!=2 then
 			if this.state!=1 then
 				spr(23,this.x,this.y)
@@ -722,7 +937,12 @@ fall_floor = {
 }
 add(types,fall_floor)
 
-function break_fall_floor(obj)
+function break_fall_floor(obj: FallFloor)
+	unique_name "break_fall_floor"
+	locals {
+		hit: ?
+	}
+body
  if obj.state==0 then
  	psfx(15)
 		obj.state=1
@@ -757,12 +977,19 @@ smoke={
 fruit={
 	tile=26,
 	if_not_fruit=true,
-	init=function(this) 
+	init=function(this: Fruit) 
+		unique_name "fruit.init"
+	body
 		this.start=this.y
 		this.off=0
 	end,
-	update=function(this)
-	 local hit=this.collide(player,0,0)
+	update=function(this: Fruit)
+		unique_name "fruit.update"
+		locals {
+			hit: ?
+		}
+	body
+		local hit=this.collide(player,0,0)
 		if hit~=nil then
 		 hit.djump=max_djump
 			sfx_timer=20
@@ -780,14 +1007,23 @@ add(types,fruit)
 fly_fruit={
 	tile=28,
 	if_not_fruit=true,
-	init=function(this) 
+	init=function(this: FlyFruit) 
+		unique_name "fly_fruit.init"
+	body
 		this.start=this.y
 		this.fly=false
 		this.step=0.5
 		this.solids=false
 		this.sfx_delay=8
 	end,
-	update=function(this)
+	update=function(this: FlyFruit)
+		unique_name "fly_fruit.update"
+		locals {
+			hit: ?
+			off: Num
+			dir: Num
+		}
+	body
 		--fly away
 		if this.fly then
 		 if this.sfx_delay>0 then
@@ -820,7 +1056,13 @@ fly_fruit={
 			destroy_object(this)
 		end
 	end,
-	draw=function(this)
+	draw=function(this: FlyFruit)
+		unique_name "fly_fruit.draw"
+		locals {
+			off: Num
+			dir: Num
+		}
+	body
 		local off=0
 		if not this.fly then
 			local dir=sin(this.step)
@@ -838,7 +1080,9 @@ fly_fruit={
 add(types,fly_fruit)
 
 lifeup = {
-	init=function(this)
+	init=function(this: Lifeup)
+		unique_name "lifeup.init"
+	body
 		this.spd.y=-0.25
 		this.duration=30
 		this.x-=2
@@ -846,13 +1090,17 @@ lifeup = {
 		this.flash=0
 		this.solids=false
 	end,
-	update=function(this)
+	update=function(this: Lifeup)
+		unique_name "lifeup.update"
+	body
 		this.duration-=1
 		if this.duration<= 0 then
 			destroy_object(this)
 		end
 	end,
-	draw=function(this)
+	draw=function(this: Lifeup)
+		unique_name "lifeup.draw"
+	body
 		this.flash+=0.5
 
 		print("1000",this.x-2,this.y,7+this.flash%2)
@@ -862,7 +1110,12 @@ lifeup = {
 fake_wall = {
 	tile=64,
 	if_not_fruit=true,
-	update=function(this)
+	update=function(this: FakeWall)
+		unique_name "fake_wall.update"
+		locals {
+			hit: ?
+		}
+	body
 		this.hitbox={x=-1,y=-1,w=18,h=18}
 		local hit = this.collide(player,0,0)
 		if hit~=nil and hit.dash_effect_time>0 then
@@ -880,7 +1133,9 @@ fake_wall = {
 		end
 		this.hitbox={x=0,y=0,w=16,h=16}
 	end,
-	draw=function(this)
+	draw=function(this: FakeWall)
+		unique_name "fake_wall.draw"
+	body
 		spr(64,this.x,this.y)
 		spr(65,this.x+8,this.y)
 		spr(80,this.x,this.y+8)
@@ -892,7 +1147,13 @@ add(types,fake_wall)
 key={
 	tile=8,
 	if_not_fruit=true,
-	update=function(this)
+	update=function(this: Key)
+		unique_name "key.update"
+		locals {
+			was: Num
+			is: Num
+		}
+	body
 		local was=flr(this.spr)
 		this.spr=9+(sin(frames/30)+0.5)*1
 		local is=flr(this.spr)
@@ -912,12 +1173,16 @@ add(types,key)
 chest={
 	tile=20,
 	if_not_fruit=true,
-	init=function(this)
+	init=function(this: Chest)
+		unique_name "chest.init"
+	body
 		this.x-=4
 		this.start=this.x
 		this.timer=20
 	end,
-	update=function(this)
+	update=function(this: Chest)
+		unique_name "chest.update"
+	body
 		if has_key then
 			this.timer-=1
 			this.x=this.start-1+rnd(3)
