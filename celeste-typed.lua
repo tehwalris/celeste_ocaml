@@ -50,7 +50,6 @@ struct Flip {
 }
 
 struct BaseObject {
-	type: ?
 	collidable: Bool
 	solids: Bool
 
@@ -65,6 +64,12 @@ struct BaseObject {
 	rem: Vec
 
 	is_solid: Function<"is_solid">
+	is_ice: Function<"is_ice">
+	collide: Function<"collide">
+	check: Function<"check">
+	move: Function<"move">
+	move_x: Function<"move_x">
+	move_y: Function<"move_y">
 
 	-- TODO
 }
@@ -351,11 +356,32 @@ union AnyObjectType {
 	RoomTitleType
 }
 
+union AnyObject {
+	Player
+	PlayerSpawn
+	Spring
+	Balloon
+	FallFloor
+	Smoke
+	Fruit
+	FlyFruit
+	Lifeup
+	FakeWall
+	Key
+	Chest
+	Platform
+	Message
+	BigChest
+	Orb
+	Flag
+	RoomTitle
+}
+
 globals {
 	-- initialized at start of file
 	room: Room
-	objects: ?
-	types: ?
+	objects: Array<AnyObject>
+	types: Array<AnyObjectType>
 	freeze: Num
 	shake: Num
 	will_restart: Bool
@@ -405,6 +431,8 @@ globals {
 	unset_hair_color: Function<["unset_hair_color"]>
 	break_spring: Function<["break_spring"]>
 	break_fall_floor: Function<["break_fall_floor"]>
+	init_object: Function<["init_object"]>
+	destroy_object: Function<["destroy_object"]>
 
 	-- object types
 	player: PlayerType
@@ -486,12 +514,14 @@ end
 
 function level_index()
 	unique_name "level_index"
+	return Num
 body
 	return room.x%8+room.y*8
 end
 
 function is_title()
 	unique_name "is_title"
+	return Bool
 body
 	return level_index()==31
 end
@@ -1546,7 +1576,13 @@ room_title = {
 -- object functions --
 -----------------------
 
-function init_object(type,x,y)
+function init_object(type: AnyObjectType, x: Num, y: Num)
+	unique_name "init_object"
+	locals {
+		obj: AnyObject
+	}
+	return ?
+body
 	if type.if_not_fruit~=nil and got_fruit[1+level_index()] then
 		return
 	end
@@ -1565,11 +1601,12 @@ function init_object(type,x,y)
 	obj.spd = {x=0,y=0}
 	obj.rem = {x=0,y=0}
 
-	obj.is_solid=function(ox,oy)
+	obj.is_solid=function(ox: Num, oy: Num)
 		unique_name "is_solid"
 		capture {
-			obj: ?,
+			obj: AnyObject,
 		}
+		return Bool
 	body
 		if oy>0 and not obj.check(platform,ox,0) and obj.check(platform,ox,oy) then
 			return true
@@ -1579,11 +1616,26 @@ function init_object(type,x,y)
 		 or obj.check(fake_wall,ox,oy)
 	end
 	
-	obj.is_ice=function(ox,oy)
+	obj.is_ice=function(ox: Num, oy: Num)
+		unique_name "is_ice"
+		capture {
+			obj: AnyObject,
+		}
+		return Bool
+	body
 		return ice_at(obj.x+obj.hitbox.x+ox,obj.y+obj.hitbox.y+oy,obj.hitbox.w,obj.hitbox.h)
 	end
 	
-	obj.collide=function(type,ox,oy)
+	obj.collide=function(type: AnyObjectType, ox: Num, oy: Num)
+		unique_name "collide"
+		capture {
+			obj: AnyObject,
+		}
+		locals {
+			other: ?
+		}
+		return ?
+	body
 		local other
 		for i=1,count(objects) do
 			other=objects[i]
@@ -1598,14 +1650,28 @@ function init_object(type,x,y)
 		return nil
 	end
 	
-	obj.check=function(type,ox,oy)
+	obj.check=function(type: AnyObjectType, ox: Num, oy: Num)
+		unique_name "check"
+		capture {
+			obj: AnyObject,
+		}
+		return Bool
+	body
 		return obj.collide(type,ox,oy) ~=nil
 	end
 	
-	obj.move=function(ox,oy)
+	obj.move=function(ox: Num, oy: Num)
+		unique_name "move"
+		capture {
+			obj: AnyObject,
+		}
+		locals {
+			amount: Num
+		}
+	body
 		local amount
 		-- [x] get move amount
- 	obj.rem.x += ox
+		obj.rem.x += ox
 		amount = flr(obj.rem.x + 0.5)
 		obj.rem.x -= amount
 		obj.move_x(amount,0)
@@ -1617,7 +1683,15 @@ function init_object(type,x,y)
 		obj.move_y(amount)
 	end
 	
-	obj.move_x=function(amount,start)
+	obj.move_x=function(amount: Num, start: Num)
+		unique_name "move_x"
+		capture {
+			obj: AnyObject,
+		}
+		locals {
+			step: Num
+		}
+	body
 		if obj.solids then
 			local step = sign(amount)
 			for i=start,abs(amount) do
@@ -1634,7 +1708,15 @@ function init_object(type,x,y)
 		end
 	end
 	
-	obj.move_y=function(amount)
+	obj.move_y=function(amount: Num)
+		unique_name "move_y"
+		capture {
+			obj: AnyObject,
+		}
+		locals {
+			step: Num
+		}
+	body
 		if obj.solids then
 			local step = sign(amount)
 			for i=0,abs(amount) do
@@ -1658,7 +1740,9 @@ function init_object(type,x,y)
 	return obj
 end
 
-function destroy_object(obj)
+function destroy_object(obj: AnyObject)
+	unique_name "destroy_object"
+body
 	del(objects,obj)
 end
 
