@@ -247,6 +247,110 @@ struct Chest extends BaseObject {
 	timer: Num
 }
 
+struct PlatformType {
+	init: Function<["platform.init"]>
+	update: Function<["platform.update"]>
+	draw: Function<["platform.draw"]>
+}
+
+struct Platform extends BaseObject {
+	type: PlatformType
+
+	last: Num
+}
+
+struct MessageType {
+	tile: Num
+	last: Num -- This is never used. Message.last is used instead.
+	draw: Function<["message.draw"]>
+}
+
+struct Message extends BaseObject {
+	type: MessageType
+
+	last: Num
+}
+
+struct BigChestType {
+	tile: Num
+	init: Function<["big_chest.init"]>
+	draw: Function<["big_chest.draw"]>
+}
+
+struct BigChestParticle {
+	x: Num
+	y: Num
+	h: Num
+	spd: Num
+}
+
+struct BigChest extends BaseObject {
+	type: BigChestType
+
+	state: Num
+	timer: Num
+	particles: Array<BigChestParticle>
+}
+
+struct OrbType {
+	init: Function<["orb.init"]>
+	draw: Function<["orb.draw"]>
+}
+
+struct OrbParticle {
+}
+
+struct Orb extends BaseObject {
+	type: OrbType
+
+	particles: Array<OrbParticle> -- never used
+}
+
+struct FlagType {
+	tile: Num
+	init: Function<["flag.init"]>
+	draw: Function<["flag.draw"]>
+}
+
+struct Flag extends BaseObject {
+	type: FlagType
+
+	score: Num
+	show: Bool
+}
+
+struct RoomTitleType {
+	init: Function<["room_title.init"]>
+	draw: Function<["room_title.draw"]>
+}
+
+struct RoomTitle extends BaseObject {
+	type: RoomTitleType
+
+	delay: Num
+}
+
+union AnyObjectType {
+	PlayerType
+	PlayerSpawnType
+	SpringType
+	BalloonType
+	FallFloorType
+	SmokeType
+	FruitType
+	FlyFruitType
+	LifeupType
+	FakeWallType
+	KeyType
+	ChestType
+	PlatformType
+	MessageType
+	BigChestType
+	OrbType
+	FlagType
+	RoomTitleType
+}
+
 globals {
 	-- initialized at start of file
 	room: Room
@@ -315,6 +419,10 @@ globals {
 	fake_wall: FakeWallType
 	key: KeyType
 	chest: ChestType
+	platform: PlatformType
+	message: MessageType
+	big_chest: BigChestType
+	flag: FlagType
 }
 
 room = { x=0, y=0 }
@@ -691,7 +799,7 @@ body
 	pal(8,(djump==1 and 8 or djump==2 and (7+flr((frames/3)%2)*4) or 12))
 end
 
-draw_hair=function(obj,facing)
+draw_hair=function(obj: Player, facing: Num)
 	unique_name "draw_hair"
 	locals {
 		last: Vec
@@ -1198,13 +1306,20 @@ chest={
 add(types,chest)
 
 platform={
-	init=function(this)
+	init=function(this: Platform)
+		unique_name "platform.init"
+	body
 		this.x-=4
 		this.solids=false
 		this.hitbox.w=16
 		this.last=this.x
 	end,
-	update=function(this)
+	update=function(this: Platform)
+		unique_name "platform.update"
+		locals {
+			hit: ?
+		}
+	body
 		this.spd.x=this.dir*0.65
 		if this.x<-16 then this.x=128
 		elseif this.x>128 then this.x=-16 end
@@ -1216,7 +1331,9 @@ platform={
 		end
 		this.last=this.x
 	end,
-	draw=function(this)
+	draw=function(this: Platform)
+		unique_name "platform.draw"
+	body
 		spr(11,this.x,this.y-1)
 		spr(12,this.x+8,this.y-1)
 	end
@@ -1225,7 +1342,9 @@ platform={
 message={
 	tile=86,
 	last=0,
-	draw=function(this)
+	draw=function(this: Message)
+		unique_name "message.draw"
+	body
 		this.text="-- celeste mountain --#this memorial to those# perished on the climb"
 		if this.check(player,4,0) then
 			if this.index<#this.text then
@@ -1256,11 +1375,18 @@ add(types,message)
 
 big_chest={
 	tile=96,
-	init=function(this)
+	init=function(this: BigChest)
+		unique_name "big_chest.init"
+	body
 		this.state=0
 		this.hitbox.w=16
 	end,
-	draw=function(this)
+	draw=function(this: BigChest)
+		unique_name "big_chest.draw"
+		locals {
+			hit: ?
+		}
+	body
 		if this.state==0 then
 			local hit=this.collide(player,0,8)
 			if hit~=nil and hit.is_solid(0,1) then
@@ -1297,7 +1423,12 @@ big_chest={
 				init_object(orb,this.x+4,this.y+4)
 				pause_player=false
 			end
-			foreach(this.particles,function(p)
+			foreach(this.particles,function(p: BigChestParticle)
+				unique_name "big_chest.draw.particles"
+				capture {
+					this: BigChest
+				}
+			body
 				p.y+=p.spd
 				line(this.x+p.x,this.y+8-p.y,this.x+p.x,min(this.y+8-p.y+p.h,this.y+8),7)
 			end)
@@ -1309,12 +1440,20 @@ big_chest={
 add(types,big_chest)
 
 orb={
-	init=function(this)
+	init=function(this: Orb)
+		unique_name "orb.init"
+	body
 		this.spd.y=-4
 		this.solids=false
 		this.particles={}
 	end,
-	draw=function(this)
+	draw=function(this: Orb)
+		unique_name "orb.draw"
+		locals {
+			hit: ?
+			off: Num
+		}
+	body
 		this.spd.y=appr(this.spd.y,0,0.5)
 		local hit=this.collide(player,0,0)
 		if this.spd.y==0 and hit~=nil then
@@ -1337,7 +1476,9 @@ orb={
 
 flag = {
 	tile=118,
-	init=function(this)
+	init=function(this: Flag)
+		unique_name "flag.init"
+	body
 		this.x+=5
 		this.score=0
 		this.show=false
@@ -1347,7 +1488,9 @@ flag = {
 			end
 		end
 	end,
-	draw=function(this)
+	draw=function(this: Flag)
+		unique_name "flag.draw"
+	body
 		this.spr=118+(frames/5)%3
 		spr(this.spr,this.x,this.y)
 		if this.show then
@@ -1366,10 +1509,17 @@ flag = {
 add(types,flag)
 
 room_title = {
-	init=function(this)
+	init=function(this: RoomTitle)
+		unique_name "room_title.init"
+	body
 		this.delay=5
  end,
-	draw=function(this)
+	draw=function(this: RoomTitle)
+		unique_name "room_title.draw"
+		locals {
+			level: Num
+		}
+	body
 		this.delay-=1
 		if this.delay<-30 then
 			destroy_object(this)
