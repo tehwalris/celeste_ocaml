@@ -70,8 +70,6 @@ struct BaseObject {
 	move: Function<"move">
 	move_x: Function<"move_x">
 	move_y: Function<"move_y">
-
-	-- TODO
 }
 
 struct Hair {
