@@ -433,6 +433,22 @@ globals {
 	break_fall_floor: Function<["break_fall_floor"]>
 	init_object: Function<["init_object"]>
 	destroy_object: Function<["destroy_object"]>
+	kill_player: Function<["kill_player"]>''
+	restart_room: Function<["restart_room"]>
+	next_room: Function<["next_room"]>
+	load_room: Function<["load_room"]>
+	_update: Function<["_update"]>
+	_draw: Function<["_draw"]>
+	draw_object: Function<["draw_object"]>
+	draw_time: Function<["draw_time"]>
+	clamp: Function<["clamp"]>
+	appr: Function<["appr"]>
+	sign: Function<["sign"]>
+	maybe: Function<["maybe"]>
+	solid_at: Function<["solid_at"]>
+	ice_at: Function<["ice_at"]>
+	tile_flag_at: Function<["tile_flag_at"]>
+	tile_at: Function<["tile_at"]>
 
 	-- object types
 	player: PlayerType
@@ -1746,7 +1762,12 @@ body
 	del(objects,obj)
 end
 
-function kill_player(obj)
+function kill_player(obj: Player)
+	unique_name "kill_player"
+	locals {
+		angle: Num
+	}
+body
 	sfx_timer=12
 	sfx(0)
 	deaths+=1
@@ -1772,11 +1793,15 @@ end
 --------------------
 
 function restart_room()
+	unique_name "restart_room"
+body
 	will_restart=true
 	delay_restart=15
 end
 
 function next_room()
+	unique_name "next_room"
+body
  if room.x==2 and room.y==1 then
   music(30,500,7)
  elseif room.x==3 and room.y==1 then
@@ -1794,7 +1819,13 @@ function next_room()
 	end
 end
 
-function load_room(x,y)
+function load_room(x: Num, y: Num)
+	unique_name "load_room"
+	locals {
+		tile: Num,
+	}
+body
+
 	has_dashed=false
 	has_key=false
 
@@ -1833,6 +1864,8 @@ end
 -----------------------
 
 function _update()
+	unique_name "_update"
+body
 	frames=((frames+1)%30)
 	if frames==0 and level_index()<30 then
 		seconds=((seconds+1)%60)
@@ -1874,7 +1907,9 @@ function _update()
 	end
 
 	-- update each object
-	foreach(objects,function(obj)
+	foreach(objects,function(obj: AnyObject)
+		unique_name "_update.foreach"
+	body
 		obj.move(obj.spd.x,obj.spd.y)
 		if obj.type.update~=nil then
 			obj.type.update(obj) 
@@ -1901,6 +1936,16 @@ end
 -- drawing functions --
 -----------------------
 function _draw()
+	unique_name "_draw"
+	locals {
+		c: Num
+		bg_col: Num
+		off: Num
+		p: ?
+		diff: Num
+	}
+body
+
 	if freeze>0 then return end
 	
 	-- reset all palette values
@@ -1941,7 +1986,9 @@ function _draw()
 
 	-- clouds
 	if not is_title() then
-		foreach(clouds, function(c)
+		foreach(clouds, function(c: Cloud)
+			unique_name "_draw.clouds"
+		body
 			c.x += c.spd
 			rectfill(c.x,c.y,c.x+c.w,c.y+4+(1-c.w/64)*12,new_bg~=nil and 14 or 1)
 			if c.x > 128 then
@@ -1955,7 +2002,9 @@ function _draw()
 	map(room.x * 16,room.y * 16,0,0,16,16,4)
 
 	-- platforms/big chest
-	foreach(objects, function(o)
+	foreach(objects, function(o: AnyObject)
+		unique_name "_draw.objects_1"
+	body
 		if o.type==platform or o.type==big_chest then
 			draw_object(o)
 		end
@@ -1966,7 +2015,9 @@ function _draw()
 	map(room.x*16,room.y * 16,off,0,16,16,2)
 	
 	-- draw objects
-	foreach(objects, function(o)
+	foreach(objects, function(o: AnyObject)
+		unique_name "_draw.objects_2"
+	body
 		if o.type~=platform and o.type~=big_chest then
 			draw_object(o)
 		end
@@ -1976,7 +2027,9 @@ function _draw()
 	map(room.x * 16,room.y * 16,0,0,16,16,8)
 	
 	-- particles
-	foreach(particles, function(p)
+	foreach(particles, function(p: Particle)
+		unique_name "_draw.particles"
+	body
 		p.x += p.spd
 		p.y += sin(p.off)
 		p.off+= min(0.05,p.spd/32)
@@ -1988,7 +2041,9 @@ function _draw()
 	end)
 	
 	-- dead particles
-	foreach(dead_particles, function(p)
+	foreach(dead_particles, function(p: DeadParticle)
+		unique_name "_draw.dead_particles"
+	body
 		p.x += p.spd.x
 		p.y += p.spd.y
 		p.t -=1
@@ -2026,7 +2081,9 @@ function _draw()
 
 end
 
-function draw_object(obj)
+function draw_object(obj: AnyObject)
+	unique_name "draw_object"
+body
 
 	if obj.type.draw ~=nil then
 		obj.type.draw(obj)
@@ -2036,7 +2093,14 @@ function draw_object(obj)
 
 end
 
-function draw_time(x,y)
+function draw_time(x: Num, y: Num)
+	unique_name "draw_time"
+	locals {
+		s: Num
+		m: Num
+		h: Num
+	}
+body
 
 	local s=seconds
 	local m=minutes%60
@@ -2050,34 +2114,55 @@ end
 -- helper functions --
 ----------------------
 
-function clamp(val,a,b)
+function clamp(val: Num, a: Num, b: Num)
+	unique_name "clamp"
+	return Num
+body
 	return max(a, min(b, val))
 end
 
-function appr(val,target,amount)
+function appr(val: Num, target: Num, amount: Num)
+	unique_name "appr"
+	return Num
+body
  return val > target 
  	and max(val - amount, target) 
  	or min(val + amount, target)
 end
 
-function sign(v)
+function sign(v: Num)
+	unique_name "sign"
+	return Num
+body
 	return v>0 and 1 or
 								v<0 and -1 or 0
 end
 
 function maybe()
+	unique_name "maybe"
+	return Bool
+body
 	return rnd(1)<0.5
 end
 
-function solid_at(x,y,w,h)
+function solid_at(x: Num, y: Num, w: Num, h: Num)
+	unique_name "solid_at"
+	return Bool
+body
  return tile_flag_at(x,y,w,h,0)
 end
 
-function ice_at(x,y,w,h)
- return tile_flag_at(x,y,w,h,4)
+function ice_at(x: Num, y: Num, w: Num, h: Num)
+	unique_name "ice_at"
+	return Bool
+body
+	return tile_flag_at(x,y,w,h,4)
 end
 
-function tile_flag_at(x,y,w,h,flag)
+function tile_flag_at(x: Num, y: Num, w: Num, h: Num, flag: Num)
+	unique_name "tile_flag_at"
+	return Bool
+body
  for i=max(0,flr(x/8)),min(15,(x+w-1)/8) do
  	for j=max(0,flr(y/8)),min(15,(y+h-1)/8) do
  		if fget(tile_at(i,j),flag) then
@@ -2088,11 +2173,20 @@ function tile_flag_at(x,y,w,h,flag)
 	return false
 end
 
-function tile_at(x,y)
+function tile_at(x: Num, y: Num)
+	unique_name "tile_at"
+	return Num
+body
  return mget(room.x * 16 + x, room.y * 16 + y)
 end
 
-function spikes_at(x,y,w,h,xspd,yspd)
+function spikes_at(x: Num, y: Num, w: Num, h: Num, xspd: Num, yspd: Num)
+	unique_name "spikes_at"
+	locals {
+		tile: Num
+	}
+	return Bool
+body
  for i=max(0,flr(x/8)),min(15,(x+w-1)/8) do
  	for j=max(0,flr(y/8)),min(15,(y+h-1)/8) do
  	 local tile=tile_at(i,j)
