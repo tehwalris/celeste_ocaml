@@ -462,18 +462,4 @@ let () =
   Printf.printf "%s\n" @@ Ir.show_fun_def target_fun_def;
   Flow.FlowGraphDot.output_graph (open_out "flow_graph.dot")
   @@ Flow.flow_graph_of_cfg target_fun_def.cfg;
-  let optimize cfg =
-    cfg |> Bypass_redundant_loads.bypass_redundant_loads
-    |> Remove_dead_instructions.remove_dead_instructions
-  in
-  let optimized_cfg =
-    iterate_until_stable
-      (fun cfg ->
-        Printf.printf "Optimizing\n%!";
-        optimize cfg)
-      target_fun_def.cfg
-  in
-  Printf.printf "%s\n" @@ Ir.show_cfg optimized_cfg;
   ()
-(* let _, result = compile_statements Ctxt.empty None statements in
-   Printf.printf "%s\n" @@ show_stream @@ List.rev result *)

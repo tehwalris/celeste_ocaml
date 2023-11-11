@@ -78,10 +78,8 @@ let instruction_map_local_ids (f : local_id -> local_id)
   | NilConstant -> instruction
   | Call (closure_id, arg_ids) -> Call (f closure_id, List.map f arg_ids)
   | UnaryOp (op, arg_id) -> UnaryOp (op, f arg_id)
-  | BinaryOp (left_id, op, right_id) ->
-      BinaryOp (f left_id, op, f right_id)
-  | Phi branches ->
-      Phi (List.map (fun (label, id) -> (label, f id)) branches)
+  | BinaryOp (left_id, op, right_id) -> BinaryOp (f left_id, op, f right_id)
+  | Phi branches -> Phi (List.map (fun (label, id) -> (label, f id)) branches)
 
 let terminator_map_local_ids (f : local_id -> local_id)
     (terminator : terminator) : terminator =
