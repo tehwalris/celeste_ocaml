@@ -1,33 +1,25 @@
 (library
  (name compiler_lib)
- (modules 
+ (modules
   aliasing
   bypass_redundant_loads
   flow
   frontend
   ir
   liveness
+  lua_tests
   pico_number
   remove_dead_instructions)
- (libraries
-  bigarray
-  lua_parser.lib
-  batteries
-  tqdm
-  ocamlgraph)
+ (libraries bigarray lua_parser.lib batteries tqdm ocamlgraph ocaml-lua)
+ (inline_tests
+  (deps
+   (glob_files *.lua)))
  (preprocess
-  (pps
-   ppx_deriving.show
-   ppx_deriving.eq
-   ppx_deriving.ord
-   ppx_inline_test)))
+  (pps ppx_deriving.show ppx_deriving.eq ppx_deriving.ord ppx_inline_test)))
 
 (executable
  (name frontend_example)
  (modules frontend_example)
  (libraries compiler_lib)
  (preprocess
-  (pps
-   ppx_deriving.show
-   ppx_deriving.eq
-   ppx_deriving.ord)))
+  (pps ppx_deriving.show ppx_deriving.eq ppx_deriving.ord)))

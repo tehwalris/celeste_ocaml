@@ -11,4 +11,5 @@
     (tqdm (>= 0.1))
     (ocamlgraph (>= 2.0.0))
     (ppx_deriving (>= 5.2.1))
-    (ppx_inline_test (>= 0.14.1))))
+    (ppx_inline_test (>= 0.14.1))
+    (lua_lib (>= 1.8))))
