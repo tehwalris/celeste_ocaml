@@ -53,7 +53,6 @@ let run_our_lua lua_code =
   let ast = Lua_parser.Parse.parse_from_string lua_code in
   let stream = Frontend.compile_top_level_ast ast in
   let cfg, fun_defs = Frontend.cfg_of_stream stream in
-  Printf.printf "%s\n" @@ Ir.show_cfg cfg;
   let fixed_env, state =
     Interpreter.init fun_defs [ ("print", handle_print_from_lua) ]
   in

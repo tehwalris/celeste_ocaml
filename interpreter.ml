@@ -257,10 +257,16 @@ let init (fun_defs : Ir.fun_def list) (builtins : (string * builtin_fun) list) :
   let state =
     List.fold_left
       (fun state (name, _) ->
-        let state, heap_id = state_heap_add state (HBuiltinFun name) in
+        let state, fun_heap_id = state_heap_add state (HBuiltinFun name) in
+        let state, fun_ptr_heap_id =
+          state_heap_add state (HValue (VPointer fun_heap_id))
+        in
         if StringMap.mem name state.global_env then
           failwith "Duplicate builtin name";
-        { state with global_env = StringMap.add name heap_id state.global_env })
+        {
+          state with
+          global_env = StringMap.add name fun_ptr_heap_id state.global_env;
+        })
       state builtins
   in
   let fixed_env = { fun_defs; builtin_funs = builtins } in

@@ -97,6 +97,16 @@ let gen_id_and_stream (insn : Ir.instruction) : Ir.local_id * stream =
 let add_terminator_if_needed (t : Ir.terminator) (code : stream) : stream =
   match code with T _ :: _ -> code | _ -> code >:: T (gen_local_id (), t)
 
+let simple_single_quote_lua_string_regex = Str.regexp {|^'\([^\\\n']*\)'$|}
+let simple_double_quote_lua_string_regex = Str.regexp {|^"\([^\\\n"]*\)"$|}
+
+let parse_lua_string (s : string) : string =
+  if Str.string_match simple_single_quote_lua_string_regex s 0 then
+    Str.matched_group 1 s
+  else if Str.string_match simple_double_quote_lua_string_regex s 0 then
+    Str.matched_group 1 s
+  else unsupported_ast (String s)
+
 let rec compile_lhs_expression (c : Ctxt.t) (expr : ast)
     (create_if_missing : bool) : Ir.local_id * stream =
   match expr with
@@ -149,7 +159,7 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
   | Bool "true" -> gen_id_and_stream (Ir.BoolConstant true)
   | Bool "false" -> gen_id_and_stream (Ir.BoolConstant false)
   | Bool "nil" -> gen_id_and_stream Ir.NilConstant
-  | String s -> gen_id_and_stream (Ir.StringConstant s)
+  | String s -> gen_id_and_stream (Ir.StringConstant (parse_lua_string s))
   | Unop (op, inner_expr) ->
       let inner_id, inner_stream = compile_rhs_expression c inner_expr in
       let result_id, result_stream =
