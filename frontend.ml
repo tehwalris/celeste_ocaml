@@ -72,19 +72,19 @@ module Ctxt = struct
   let lookup_opt : string -> t -> Ir.local_id option = List.assoc_opt
 end
 
-let gen_local_id : unit -> int =
+let gen_local_id : unit -> Ir.local_id =
   let i = ref 0 in
   fun () ->
     incr i;
     !i
 
-let gen_global_id : string -> string =
+let gen_global_id : string -> Ir.global_id =
   let i = ref 0 in
   fun s ->
     incr i;
     Printf.sprintf "%s_%d" s !i
 
-let gen_label : string -> string =
+let gen_label : string -> Ir.label =
   let i = ref 0 in
   fun s ->
     incr i;

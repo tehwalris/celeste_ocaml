@@ -5,6 +5,7 @@
   bypass_redundant_loads
   flow
   frontend
+  interpreter
   ir
   liveness
   lua_tests
