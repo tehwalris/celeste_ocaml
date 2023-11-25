@@ -184,3 +184,19 @@ let interpret_instruction (state : state) (fun_defs : Ir.fun_def list)
   | UnaryOp _ -> failwith "TODO UnaryOp instruction not implemented"
   | BinaryOp _ -> failwith "TODO BinaryOp instruction not implemented"
   | Phi _ -> failwith "TODO Phi instruction not implemented"
+
+type terminator_result = Ret of value option | Br of Ir.label
+
+let interpret_terminator (state : state) (terminator : Ir.terminator) :
+    terminator_result =
+  match terminator with
+  | Ir.Ret (Some local_id) ->
+      let value = Ir.LocalIdMap.find local_id state.local_env in
+      Ret (Some value)
+  | Ir.Ret None -> Ret None
+  | Ir.Br label -> Br label
+  | Ir.Cbr (local_id, true_label, false_label) -> (
+      match Ir.LocalIdMap.find local_id state.local_env with
+      | VBool true -> Br true_label
+      | VBool false -> Br false_label
+      | _ -> failwith "Cbr called on non-boolean value")
