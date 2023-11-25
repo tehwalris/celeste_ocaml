@@ -21,6 +21,7 @@ type heap_value =
   | HArrayTable of heap_id list
   | HUnknownTable
   | HClosure of Ir.global_id * value list
+  | HBuiltinFun of string
 
 module HeapIdMap = Map.Make (struct
   type t = heap_id
@@ -38,6 +39,13 @@ type state = {
   heap : heap_value HeapIdMap.t;
   local_env : value Ir.LocalIdMap.t;
   global_env : heap_id StringMap.t;
+}
+
+type builtin_fun = state -> value list -> state
+
+type fixed_env = {
+  fun_defs : Ir.fun_def list;
+  builtin_funs : (string * builtin_fun) list;
 }
 
 let heap_id_from_pointer_local (state : state) (local_id : Ir.local_id) :
@@ -59,7 +67,7 @@ let state_heap_update (state : state) (update : heap_value -> heap_value)
   let new_heap_value = update old_heap_value in
   { state with heap = HeapIdMap.add heap_id new_heap_value state.heap }
 
-let interpret_instruction (state : state) (fun_defs : Ir.fun_def list)
+let interpret_instruction (fixed_env : fixed_env) (state : state)
     (insn : Ir.instruction) : state * value =
   match insn with
   | Alloc ->
@@ -180,7 +188,18 @@ let interpret_instruction (state : state) (fun_defs : Ir.fun_def list)
   | BoolConstant v -> (state, VBool v)
   | StringConstant v -> (state, VString v)
   | NilConstant -> (state, VNil)
-  | Call _ -> failwith "TODO Call instruction not implemented"
+  | Call (fun_local_id, arg_local_ids) -> (
+      let arg_values =
+        List.map (fun id -> Ir.LocalIdMap.find id state.local_env) arg_local_ids
+      in
+      let fun_heap_id = heap_id_from_pointer_local state fun_local_id in
+      match HeapIdMap.find fun_heap_id state.heap with
+      | HBuiltinFun name ->
+          let builtin_fun = List.assoc name fixed_env.builtin_funs in
+          let state = builtin_fun state arg_values in
+          (state, VNil)
+      | HClosure _ -> failwith "TODO closure call not implemented"
+      | _ -> failwith "Calling something that's not a function")
   | UnaryOp _ -> failwith "TODO UnaryOp instruction not implemented"
   | BinaryOp _ -> failwith "TODO BinaryOp instruction not implemented"
   | Phi _ -> failwith "TODO Phi instruction not implemented"
@@ -200,3 +219,30 @@ let interpret_terminator (state : state) (terminator : Ir.terminator) :
       | VBool true -> Br true_label
       | VBool false -> Br false_label
       | _ -> failwith "Cbr called on non-boolean value")
+
+let interpret_block (fixed_env : fixed_env) (state : state) (block : Ir.block) :
+    state * terminator_result =
+  let state =
+    List.fold_left
+      (fun state (local_id, insn) ->
+        let state, value = interpret_instruction fixed_env state insn in
+        {
+          state with
+          local_env = Ir.LocalIdMap.add local_id value state.local_env;
+        })
+      state block.instructions
+  in
+  let _, terminator = block.terminator in
+  let terminator_result = interpret_terminator state terminator in
+  (state, terminator_result)
+
+let rec interpret_cfg (fixed_env : fixed_env) (state : state) (cfg : Ir.cfg) :
+    value option =
+  let rec interpret_block_rec (state : state) (block : Ir.block) : value option
+      =
+    let state, terminator_result = interpret_block fixed_env state block in
+    match terminator_result with
+    | Ret value -> value
+    | Br label -> interpret_block_rec state @@ List.assoc label cfg.named
+  in
+  interpret_block_rec state cfg.entry
