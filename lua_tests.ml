@@ -13,7 +13,15 @@ let check_lua_status state status =
       in
       failwith err_msg
 
-let%test_unit _ =
+let assert_string_list_equal l_actual l_expected =
+  let format_list l = String.concat "\n" @@ List.map (Printf.sprintf "%S") l in
+  if l_actual <> l_expected then (
+    Printf.printf
+      "Lists of strings are different.\n\nActual: \n%s\n\nExpected: \n%s"
+      (format_list l_actual) (format_list l_expected);
+    assert false)
+
+let run_real_lua lua_code =
   let collected_prints = ref [] in
   let handle_print_from_lua state =
     if Lua.gettop state <> 1 then failwith "Wrong number of arguments";
@@ -26,6 +34,35 @@ let%test_unit _ =
   LuaL.openlibs state;
   Lua.pushcfunction state handle_print_from_lua;
   Lua.setglobal state "print";
-  check_lua_status state @@ LuaL.loadfile state "hello_world.lua";
+  check_lua_status state @@ LuaL.loadstring state lua_code;
   check_lua_status state @@ Lua.pcall state 0 0 0;
-  assert (List.rev !collected_prints = [ "walrus" ])
+  List.rev !collected_prints
+
+let run_our_lua lua_code =
+  let collected_prints = ref [] in
+  let handle_print_from_lua : Interpreter.builtin_fun =
+   fun state args ->
+    let s =
+      match args with
+      | [ Interpreter.VString s ] -> s
+      | _ -> failwith "Wrong args"
+    in
+    collected_prints := s :: !collected_prints;
+    state
+  in
+  let ast = Lua_parser.Parse.parse_from_string lua_code in
+  let stream = Frontend.compile_top_level_ast ast in
+  let cfg, fun_defs = Frontend.cfg_of_stream stream in
+  Printf.printf "%s\n" @@ Ir.show_cfg cfg;
+  let fixed_env, state =
+    Interpreter.init fun_defs [ ("print", handle_print_from_lua) ]
+  in
+  let return_value = Interpreter.interpret_cfg fixed_env state cfg in
+  if return_value <> None then failwith "Unexpected return value";
+  List.rev !collected_prints
+
+let%test_unit _ =
+  let lua_code = BatFile.with_file_in "hello_world.lua" BatIO.read_all in
+  let expected_prints = run_real_lua lua_code in
+  let actual_prints = run_our_lua lua_code in
+  assert_string_list_equal actual_prints expected_prints

@@ -1,5 +1,3 @@
-open Compiler_lib
-
 type heap_id = int [@@deriving show]
 
 let gen_heap_id : unit -> heap_id =
@@ -236,7 +234,7 @@ let interpret_block (fixed_env : fixed_env) (state : state) (block : Ir.block) :
   let terminator_result = interpret_terminator state terminator in
   (state, terminator_result)
 
-let rec interpret_cfg (fixed_env : fixed_env) (state : state) (cfg : Ir.cfg) :
+let interpret_cfg (fixed_env : fixed_env) (state : state) (cfg : Ir.cfg) :
     value option =
   let rec interpret_block_rec (state : state) (block : Ir.block) : value option
       =
@@ -246,3 +244,24 @@ let rec interpret_cfg (fixed_env : fixed_env) (state : state) (cfg : Ir.cfg) :
     | Br label -> interpret_block_rec state @@ List.assoc label cfg.named
   in
   interpret_block_rec state cfg.entry
+
+let init (fun_defs : Ir.fun_def list) (builtins : (string * builtin_fun) list) :
+    fixed_env * state =
+  let state =
+    {
+      heap = HeapIdMap.empty;
+      local_env = Ir.LocalIdMap.empty;
+      global_env = StringMap.empty;
+    }
+  in
+  let state =
+    List.fold_left
+      (fun state (name, _) ->
+        let state, heap_id = state_heap_add state (HBuiltinFun name) in
+        if StringMap.mem name state.global_env then
+          failwith "Duplicate builtin name";
+        { state with global_env = StringMap.add name heap_id state.global_env })
+      state builtins
+  in
+  let fixed_env = { fun_defs; builtin_funs = builtins } in
+  (fixed_env, state)

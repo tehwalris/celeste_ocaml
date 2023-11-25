@@ -416,6 +416,15 @@ and compile_statements (c : Ctxt.t) (break_label : Ir.label option)
       (new_c, extra_code @ old_code))
     (c, []) statements
 
+let compile_top_level_ast (ast : ast) : stream =
+  let statements =
+    match ast with
+    | Lua_parser.Ast.Slist l -> l
+    | _ -> failwith "AST should have an Slist at the top level"
+  in
+  let _, stream = compile_statements Ctxt.empty None statements in
+  stream >@ [ T (gen_local_id (), Ir.Ret None) ]
+
 let load_program filename =
   BatFile.with_file_in filename (fun f ->
       f |> Batteries.IO.to_input_channel |> Lua_parser.Parse.parse_from_chan)
