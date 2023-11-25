@@ -46,6 +46,19 @@ let heap_id_from_pointer_local (state : state) (local_id : Ir.local_id) :
   | VPointer heap_id -> heap_id
   | _ -> failwith "Value is not a pointer"
 
+let state_heap_add (state : state) (heap_value : heap_value) : state * heap_id =
+  let heap_id = gen_heap_id () in
+  let state =
+    { state with heap = HeapIdMap.add heap_id heap_value state.heap }
+  in
+  (state, heap_id)
+
+let state_heap_update (state : state) (update : heap_value -> heap_value)
+    (heap_id : heap_id) : state =
+  let old_heap_value = HeapIdMap.find heap_id state.heap in
+  let new_heap_value = update old_heap_value in
+  { state with heap = HeapIdMap.add heap_id new_heap_value state.heap }
+
 let interpret_instruction (state : state) (insn : Ir.instruction)
     (fun_defs : Ir.fun_def list) : value * state =
   match insn with
@@ -82,17 +95,12 @@ let interpret_instruction (state : state) (insn : Ir.instruction)
       let heap_id = heap_id_from_pointer_local state target_local_id in
       let source_value = Ir.LocalIdMap.find source_local_id state.local_env in
       let state =
-        {
-          state with
-          heap = HeapIdMap.add heap_id (HValue source_value) state.heap;
-        }
+        state_heap_update state (fun _ -> HValue source_value) heap_id
       in
       (VNil, state)
   | StoreEmptyTable local_id ->
       let heap_id = heap_id_from_pointer_local state local_id in
-      let state =
-        { state with heap = HeapIdMap.add heap_id HUnknownTable state.heap }
-      in
+      let state = state_heap_update state (fun _ -> HObjectTable []) heap_id in
       (VNil, state)
   | StoreClosure (target_local_id, fun_global_id, captured_local_ids) ->
       let heap_id = heap_id_from_pointer_local state target_local_id in
@@ -102,13 +110,29 @@ let interpret_instruction (state : state) (insn : Ir.instruction)
           captured_local_ids
       in
       let state =
-        {
-          state with
-          heap =
-            HeapIdMap.add heap_id
-              (HClosure (fun_global_id, captured_values))
-              state.heap;
-        }
+        state_heap_update state
+          (fun _ -> HClosure (fun_global_id, captured_values))
+          heap_id
       in
       (VNil, state)
+  | GetField (table_local_id, field_name, create_if_missing) ->
+      let table_heap_id = heap_id_from_pointer_local state table_local_id in
+      let old_fields =
+        match HeapIdMap.find table_heap_id state.heap with
+        | HObjectTable old_fields -> old_fields
+        | HUnknownTable -> []
+        | _ ->
+            failwith
+              "GetField called on something that's not an object-like table or \
+               unknown table"
+      in
+      let state, field_heap_id =
+        match List.assoc_opt field_name old_fields with
+        | Some heap_id -> (state, heap_id)
+        | None ->
+            if not create_if_missing then
+              failwith "Field not found, but create_if_missing was false";
+            state_heap_add state HUnknownTable
+      in
+      (VPointer field_heap_id, state)
   | _ -> failwith "TODO instruction not implemented"
