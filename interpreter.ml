@@ -18,7 +18,7 @@ type value =
 type heap_value =
   | HValue of value
   | HObjectTable of (string * heap_id) list
-  | HArrayTable of (int * heap_id) list
+  | HArrayTable of heap_id list
   | HUnknownTable
   | HClosure of Ir.global_id * value list
 
@@ -128,11 +128,52 @@ let interpret_instruction (state : state) (fun_defs : Ir.fun_def list)
       in
       let state, field_heap_id =
         match List.assoc_opt field_name old_fields with
-        | Some heap_id -> (state, heap_id)
+        | Some field_heap_id -> (state, field_heap_id)
         | None ->
             if not create_if_missing then
               failwith "Field not found, but create_if_missing was false";
-            state_heap_add state HUnknownTable
+            let state, field_heap_id = state_heap_add state (HValue VNil) in
+            let state =
+              state_heap_update state
+                (fun _ ->
+                  HObjectTable ((field_name, field_heap_id) :: old_fields))
+                table_heap_id
+            in
+            (state, field_heap_id)
+      in
+      (state, VPointer field_heap_id)
+  | GetIndex (table_local_id, index_local_id, create_if_missing) ->
+      let table_heap_id = heap_id_from_pointer_local state table_local_id in
+      let index =
+        match Ir.LocalIdMap.find index_local_id state.local_env with
+        | VNumber i ->
+            if Pico_number.fraction_int_of i <> 0 then
+              failwith "Index is not an integer";
+            Pico_number.int_of i
+        | _ -> failwith "Index is not an number"
+      in
+      let old_fields =
+        match HeapIdMap.find table_heap_id state.heap with
+        | HArrayTable old_fields -> old_fields
+        | HUnknownTable -> []
+        | _ ->
+            failwith
+              "GetIndex called on something that's not an array-like table or \
+               unknown table"
+      in
+      let state, field_heap_id =
+        match List.nth_opt old_fields index with
+        | Some field_heap_id -> (state, field_heap_id)
+        | None ->
+            if not create_if_missing then
+              failwith "Index not found, but create_if_missing was false";
+            let state, field_heap_id = state_heap_add state (HValue VNil) in
+            let state =
+              state_heap_update state
+                (fun _ -> HArrayTable (old_fields @ [ field_heap_id ]))
+                table_heap_id
+            in
+            (state, field_heap_id)
       in
       (state, VPointer field_heap_id)
   | _ -> failwith "TODO instruction not implemented"
