@@ -176,4 +176,11 @@ let interpret_instruction (state : state) (fun_defs : Ir.fun_def list)
             (state, field_heap_id)
       in
       (state, VPointer field_heap_id)
-  | _ -> failwith "TODO instruction not implemented"
+  | NumberConstant v -> (state, VNumber v)
+  | BoolConstant v -> (state, VBool v)
+  | StringConstant v -> (state, VString v)
+  | NilConstant -> (state, VNil)
+  | Call _ -> failwith "TODO Call instruction not implemented"
+  | UnaryOp _ -> failwith "TODO UnaryOp instruction not implemented"
+  | BinaryOp _ -> failwith "TODO BinaryOp instruction not implemented"
+  | Phi _ -> failwith "TODO Phi instruction not implemented"
