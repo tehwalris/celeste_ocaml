@@ -59,13 +59,13 @@ let state_heap_update (state : state) (update : heap_value -> heap_value)
   let new_heap_value = update old_heap_value in
   { state with heap = HeapIdMap.add heap_id new_heap_value state.heap }
 
-let interpret_instruction (state : state) (insn : Ir.instruction)
-    (fun_defs : Ir.fun_def list) : value * state =
+let interpret_instruction (state : state) (fun_defs : Ir.fun_def list)
+    (insn : Ir.instruction) : state * value =
   match insn with
   | Alloc ->
       let heap_id = gen_heap_id () in
-      ( VPointer heap_id,
-        { state with heap = HeapIdMap.add heap_id (HValue VNil) state.heap } )
+      ( { state with heap = HeapIdMap.add heap_id (HValue VNil) state.heap },
+        VPointer heap_id )
   | GetGlobal (name, create_if_missing) ->
       let heap_id, state =
         match StringMap.find_opt name state.global_env with
@@ -73,7 +73,7 @@ let interpret_instruction (state : state) (insn : Ir.instruction)
         | None ->
             if not create_if_missing then
               failwith "Global not found, but create_if_missing was false";
-            let heap_id = gen_heap_id () in
+            let state, heap_id = state_heap_add state (HValue VNil) in
             let state =
               {
                 state with
@@ -82,7 +82,7 @@ let interpret_instruction (state : state) (insn : Ir.instruction)
             in
             (heap_id, state)
       in
-      (VPointer heap_id, state)
+      (state, VPointer heap_id)
   | Load local_id ->
       let heap_id = heap_id_from_pointer_local state local_id in
       let value =
@@ -90,18 +90,18 @@ let interpret_instruction (state : state) (insn : Ir.instruction)
         | HValue value -> value
         | _ -> failwith "Value is of a type that can not be stored in a local"
       in
-      (value, state)
+      (state, value)
   | Store (target_local_id, source_local_id) ->
       let heap_id = heap_id_from_pointer_local state target_local_id in
       let source_value = Ir.LocalIdMap.find source_local_id state.local_env in
       let state =
         state_heap_update state (fun _ -> HValue source_value) heap_id
       in
-      (VNil, state)
+      (state, VNil)
   | StoreEmptyTable local_id ->
       let heap_id = heap_id_from_pointer_local state local_id in
       let state = state_heap_update state (fun _ -> HObjectTable []) heap_id in
-      (VNil, state)
+      (state, VNil)
   | StoreClosure (target_local_id, fun_global_id, captured_local_ids) ->
       let heap_id = heap_id_from_pointer_local state target_local_id in
       let captured_values =
@@ -114,7 +114,7 @@ let interpret_instruction (state : state) (insn : Ir.instruction)
           (fun _ -> HClosure (fun_global_id, captured_values))
           heap_id
       in
-      (VNil, state)
+      (state, VNil)
   | GetField (table_local_id, field_name, create_if_missing) ->
       let table_heap_id = heap_id_from_pointer_local state table_local_id in
       let old_fields =
@@ -134,5 +134,5 @@ let interpret_instruction (state : state) (insn : Ir.instruction)
               failwith "Field not found, but create_if_missing was false";
             state_heap_add state HUnknownTable
       in
-      (VPointer field_heap_id, state)
+      (state, VPointer field_heap_id)
   | _ -> failwith "TODO instruction not implemented"
