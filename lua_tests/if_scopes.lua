@@ -1,3 +1,5 @@
+y = nil
+
 function f(x)
   if x then
     local y = 5

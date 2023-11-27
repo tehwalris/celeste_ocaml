@@ -65,7 +65,9 @@ let state_heap_update (state : state) (update : heap_value -> heap_value)
   let new_heap_value = update old_heap_value in
   { state with heap = HeapIdMap.add heap_id new_heap_value state.heap }
 
-let interpret_instruction (fixed_env : fixed_env) (state : state)
+type terminator_result = Ret of value option | Br of Ir.label
+
+let rec interpret_instruction (fixed_env : fixed_env) (state : state)
     (insn : Ir.instruction) : state * value =
   match insn with
   | Alloc ->
@@ -78,7 +80,9 @@ let interpret_instruction (fixed_env : fixed_env) (state : state)
         | Some heap_id -> (heap_id, state)
         | None ->
             if not create_if_missing then
-              failwith "Global not found, but create_if_missing was false";
+              failwith
+              @@ Printf.sprintf
+                   "Global %s not found, but create_if_missing was false" name;
             let state, heap_id = state_heap_add state (HValue VNil) in
             let state =
               {
@@ -196,15 +200,40 @@ let interpret_instruction (fixed_env : fixed_env) (state : state)
           let builtin_fun = List.assoc name fixed_env.builtin_funs in
           let state = builtin_fun state arg_values in
           (state, VNil)
-      | HClosure _ -> failwith "TODO closure call not implemented"
+      | HClosure (fun_global_id, captured_values) ->
+          let fun_def =
+            List.find
+              (fun def -> def.Ir.name = fun_global_id)
+              fixed_env.fun_defs
+          in
+          let inner_state : state =
+            {
+              state with
+              local_env =
+                List.fold_left2
+                  (fun locals id value -> Ir.LocalIdMap.add id value locals)
+                  Ir.LocalIdMap.empty
+                  (fun_def.Ir.capture_ids @ fun_def.Ir.arg_ids)
+                  (captured_values @ arg_values);
+            }
+          in
+          let inner_state, return_value =
+            interpret_cfg fixed_env inner_state fun_def.cfg
+          in
+          let state =
+            {
+              state with
+              heap = inner_state.heap;
+              global_env = inner_state.global_env;
+            }
+          in
+          (state, Option.value return_value ~default:VNil)
       | _ -> failwith "Calling something that's not a function")
   | UnaryOp _ -> failwith "TODO UnaryOp instruction not implemented"
   | BinaryOp _ -> failwith "TODO BinaryOp instruction not implemented"
   | Phi _ -> failwith "TODO Phi instruction not implemented"
 
-type terminator_result = Ret of value option | Br of Ir.label
-
-let interpret_terminator (state : state) (terminator : Ir.terminator) :
+and interpret_terminator (state : state) (terminator : Ir.terminator) :
     terminator_result =
   match terminator with
   | Ir.Ret (Some local_id) ->
@@ -218,7 +247,7 @@ let interpret_terminator (state : state) (terminator : Ir.terminator) :
       | VBool false -> Br false_label
       | _ -> failwith "Cbr called on non-boolean value")
 
-let interpret_block (fixed_env : fixed_env) (state : state) (block : Ir.block) :
+and interpret_block (fixed_env : fixed_env) (state : state) (block : Ir.block) :
     state * terminator_result =
   let state =
     List.fold_left
@@ -234,13 +263,12 @@ let interpret_block (fixed_env : fixed_env) (state : state) (block : Ir.block) :
   let terminator_result = interpret_terminator state terminator in
   (state, terminator_result)
 
-let interpret_cfg (fixed_env : fixed_env) (state : state) (cfg : Ir.cfg) :
-    value option =
-  let rec interpret_block_rec (state : state) (block : Ir.block) : value option
-      =
+and interpret_cfg (fixed_env : fixed_env) (state : state) (cfg : Ir.cfg) :
+    state * value option =
+  let rec interpret_block_rec state block =
     let state, terminator_result = interpret_block fixed_env state block in
     match terminator_result with
-    | Ret value -> value
+    | Ret value -> (state, value)
     | Br label -> interpret_block_rec state @@ List.assoc label cfg.named
   in
   interpret_block_rec state cfg.entry

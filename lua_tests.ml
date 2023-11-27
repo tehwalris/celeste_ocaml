@@ -48,6 +48,7 @@ let run_our_lua lua_code =
       match args with
       | [ Interpreter.VString s ] -> s
       | [ Interpreter.VNumber n ] -> Int.to_string @@ Pico_number.int_of n
+      | [ Interpreter.VNil ] -> "nil"
       | _ -> failwith "Wrong args"
     in
     collected_prints := s :: !collected_prints;
@@ -59,7 +60,7 @@ let run_our_lua lua_code =
   let fixed_env, state =
     Interpreter.init fun_defs [ ("print", handle_print_from_lua) ]
   in
-  let return_value = Interpreter.interpret_cfg fixed_env state cfg in
+  let _, return_value = Interpreter.interpret_cfg fixed_env state cfg in
   if return_value <> None then failwith "Unexpected return value";
   List.rev !collected_prints
 
