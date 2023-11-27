@@ -10,7 +10,3 @@ f(true)
 print(y)
 f(false)
 print(y)
-
--- prints:
--- nil
--- 7

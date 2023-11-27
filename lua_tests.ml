@@ -25,7 +25,9 @@ let run_real_lua lua_code =
   let collected_prints = ref [] in
   let handle_print_from_lua state =
     if Lua.gettop state <> 1 then failwith "Wrong number of arguments";
-    let s = Option.get @@ Lua.tostring state 1 in
+    let s =
+      if Lua.isnil state 1 then "nil" else Option.get @@ Lua.tostring state 1
+    in
     collected_prints := s :: !collected_prints;
     0
   in
@@ -45,6 +47,7 @@ let run_our_lua lua_code =
     let s =
       match args with
       | [ Interpreter.VString s ] -> s
+      | [ Interpreter.VNumber n ] -> Int.to_string @@ Pico_number.int_of n
       | _ -> failwith "Wrong args"
     in
     collected_prints := s :: !collected_prints;
@@ -71,3 +74,4 @@ let test_lua filename =
   assert_string_list_equal actual_prints expected_prints
 
 let%test_unit _ = test_lua "hello_world.lua"
+let%test_unit _ = test_lua "if_scopes.lua"
