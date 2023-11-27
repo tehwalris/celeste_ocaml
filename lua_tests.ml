@@ -76,3 +76,4 @@ let test_lua filename =
 
 let%test_unit _ = test_lua "hello_world.lua"
 let%test_unit _ = test_lua "if_scopes.lua"
+let%test_unit _ = test_lua "every_kind_of_if_else.lua"
