@@ -60,8 +60,14 @@ let run_our_lua lua_code =
   if return_value <> None then failwith "Unexpected return value";
   List.rev !collected_prints
 
-let%test_unit _ =
-  let lua_code = BatFile.with_file_in "hello_world.lua" BatIO.read_all in
+let test_lua filename =
+  let lua_code =
+    BatFile.with_file_in
+      (BatFilename.concat "lua_tests" filename)
+      BatIO.read_all
+  in
   let expected_prints = run_real_lua lua_code in
   let actual_prints = run_our_lua lua_code in
   assert_string_list_equal actual_prints expected_prints
+
+let%test_unit _ = test_lua "hello_world.lua"
