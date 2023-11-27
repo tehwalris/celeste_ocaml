@@ -74,7 +74,8 @@ let test_lua filename =
   let actual_prints = run_our_lua lua_code in
   assert_string_list_equal actual_prints expected_prints
 
+let%test_unit _ = test_lua "every_kind_of_if_else.lua"
 let%test_unit _ = test_lua "hello_world.lua"
 let%test_unit _ = test_lua "if_scopes.lua"
-let%test_unit _ = test_lua "every_kind_of_if_else.lua"
 let%test_unit _ = test_lua "properties.lua"
+let%test_unit _ = test_lua "scopes.lua"
