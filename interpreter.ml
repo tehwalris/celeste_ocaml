@@ -100,12 +100,15 @@ let interpret_binary_op (l : value) (op : string) (r : value) : value =
            (show_value r)
 
 let rec interpret_instruction (fixed_env : fixed_env) (state : state)
-    (insn : Ir.instruction) : state * value =
+    (source_block_for_phi : Ir.label option) (insn : Ir.instruction) :
+    state * value * Ir.label option =
   match insn with
   | Alloc ->
       let heap_id = gen_heap_id () in
-      ( { state with heap = HeapIdMap.add heap_id (HValue VNil) state.heap },
-        VPointer heap_id )
+      let state =
+        { state with heap = HeapIdMap.add heap_id (HValue VNil) state.heap }
+      in
+      (state, VPointer heap_id, None)
   | GetGlobal (name, create_if_missing) ->
       let heap_id, state =
         match StringMap.find_opt name state.global_env with
@@ -124,7 +127,7 @@ let rec interpret_instruction (fixed_env : fixed_env) (state : state)
             in
             (heap_id, state)
       in
-      (state, VPointer heap_id)
+      (state, VPointer heap_id, None)
   | Load local_id ->
       let heap_id = heap_id_from_pointer_local state local_id in
       let value =
@@ -132,18 +135,18 @@ let rec interpret_instruction (fixed_env : fixed_env) (state : state)
         | HValue value -> value
         | _ -> failwith "Value is of a type that can not be stored in a local"
       in
-      (state, value)
+      (state, value, None)
   | Store (target_local_id, source_local_id) ->
       let heap_id = heap_id_from_pointer_local state target_local_id in
       let source_value = Ir.LocalIdMap.find source_local_id state.local_env in
       let state =
         state_heap_update state (fun _ -> HValue source_value) heap_id
       in
-      (state, VNil)
+      (state, VNil, None)
   | StoreEmptyTable local_id ->
       let heap_id = heap_id_from_pointer_local state local_id in
       let state = state_heap_update state (fun _ -> HObjectTable []) heap_id in
-      (state, VNil)
+      (state, VNil, None)
   | StoreClosure (target_local_id, fun_global_id, captured_local_ids) ->
       let heap_id = heap_id_from_pointer_local state target_local_id in
       let captured_values =
@@ -156,7 +159,7 @@ let rec interpret_instruction (fixed_env : fixed_env) (state : state)
           (fun _ -> HClosure (fun_global_id, captured_values))
           heap_id
       in
-      (state, VNil)
+      (state, VNil, None)
   | GetField (table_local_id, field_name, create_if_missing) ->
       let table_heap_id = heap_id_from_pointer_local state table_local_id in
       let old_fields =
@@ -183,7 +186,7 @@ let rec interpret_instruction (fixed_env : fixed_env) (state : state)
             in
             (state, field_heap_id)
       in
-      (state, VPointer field_heap_id)
+      (state, VPointer field_heap_id, None)
   | GetIndex (table_local_id, index_local_id, create_if_missing) ->
       let table_heap_id = heap_id_from_pointer_local state table_local_id in
       let index =
@@ -217,11 +220,11 @@ let rec interpret_instruction (fixed_env : fixed_env) (state : state)
             in
             (state, field_heap_id)
       in
-      (state, VPointer field_heap_id)
-  | NumberConstant v -> (state, VNumber v)
-  | BoolConstant v -> (state, VBool v)
-  | StringConstant v -> (state, VString v)
-  | NilConstant -> (state, VNil)
+      (state, VPointer field_heap_id, None)
+  | NumberConstant v -> (state, VNumber v, None)
+  | BoolConstant v -> (state, VBool v, None)
+  | StringConstant v -> (state, VString v, None)
+  | NilConstant -> (state, VNil, None)
   | Call (fun_local_id, arg_local_ids) -> (
       let arg_values =
         List.map (fun id -> Ir.LocalIdMap.find id state.local_env) arg_local_ids
@@ -231,7 +234,7 @@ let rec interpret_instruction (fixed_env : fixed_env) (state : state)
       | HBuiltinFun name ->
           let builtin_fun = List.assoc name fixed_env.builtin_funs in
           let state = builtin_fun state arg_values in
-          (state, VNil)
+          (state, VNil, None)
       | HClosure (fun_global_id, captured_values) ->
           let fun_def =
             List.find
@@ -259,16 +262,21 @@ let rec interpret_instruction (fixed_env : fixed_env) (state : state)
               global_env = inner_state.global_env;
             }
           in
-          (state, Option.value return_value ~default:VNil)
+          (state, Option.value return_value ~default:VNil, None)
       | _ -> failwith "Calling something that's not a function")
   | UnaryOp (op, local_id) ->
       let value = Ir.LocalIdMap.find local_id state.local_env in
-      (state, interpret_unary_op op value)
+      (state, interpret_unary_op op value, None)
   | BinaryOp (left_local_id, op, right_local_id) ->
       let left_value = Ir.LocalIdMap.find left_local_id state.local_env in
       let right_value = Ir.LocalIdMap.find right_local_id state.local_env in
-      (state, interpret_binary_op left_value op right_value)
-  | Phi _ -> failwith "TODO Phi instruction not implemented"
+      (state, interpret_binary_op left_value op right_value, None)
+  | Phi local_ids_by_label ->
+      let local_id =
+        List.assoc (Option.get source_block_for_phi) local_ids_by_label
+      in
+      let value = Ir.LocalIdMap.find local_id state.local_env in
+      (state, value, source_block_for_phi)
 
 and interpret_terminator (state : state) (terminator : Ir.terminator) :
     terminator_result =
@@ -284,17 +292,24 @@ and interpret_terminator (state : state) (terminator : Ir.terminator) :
       | VBool false -> Br false_label
       | _ -> failwith "Cbr called on non-boolean value")
 
-and interpret_block (fixed_env : fixed_env) (state : state) (block : Ir.block) :
+and interpret_block (fixed_env : fixed_env) (state : state)
+    (source_block_for_phi : Ir.label option) (block : Ir.block) :
     state * terminator_result =
-  let state =
+  let state, _ =
     List.fold_left
-      (fun state (local_id, insn) ->
-        let state, value = interpret_instruction fixed_env state insn in
-        {
-          state with
-          local_env = Ir.LocalIdMap.add local_id value state.local_env;
-        })
-      state block.instructions
+      (fun (state, source_block_for_phi) (local_id, insn) ->
+        let state, value, source_block_for_phi =
+          interpret_instruction fixed_env state source_block_for_phi insn
+        in
+        let state =
+          {
+            state with
+            local_env = Ir.LocalIdMap.add local_id value state.local_env;
+          }
+        in
+        (state, source_block_for_phi))
+      (state, source_block_for_phi)
+      block.instructions
   in
   let _, terminator = block.terminator in
   let terminator_result = interpret_terminator state terminator in
@@ -302,13 +317,17 @@ and interpret_block (fixed_env : fixed_env) (state : state) (block : Ir.block) :
 
 and interpret_cfg (fixed_env : fixed_env) (state : state) (cfg : Ir.cfg) :
     state * value option =
-  let rec interpret_block_rec state block =
-    let state, terminator_result = interpret_block fixed_env state block in
+  let rec interpret_block_rec state source_block_for_phi block_label block =
+    let state, terminator_result =
+      interpret_block fixed_env state source_block_for_phi block
+    in
     match terminator_result with
     | Ret value -> (state, value)
-    | Br label -> interpret_block_rec state @@ List.assoc label cfg.named
+    | Br label ->
+        interpret_block_rec state block_label (Some label)
+        @@ List.assoc label cfg.named
   in
-  interpret_block_rec state cfg.entry
+  interpret_block_rec state None None cfg.entry
 
 let init (fun_defs : Ir.fun_def list) (builtins : (string * builtin_fun) list) :
     fixed_env * state =
