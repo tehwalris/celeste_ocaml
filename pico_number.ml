@@ -73,12 +73,27 @@ let ceil_bits (b : int) (n : t) : t =
   assert (ceil >= n);
   ceil
 
-let mul (a : t) (b : t) =
+let add (a : t) (b : t) : t = Int32.add a b
+let sub (a : t) (b : t) : t = Int32.sub a b
+
+let mul (a : t) (b : t) : t =
   let result_high = Int64.mul (Int64.of_int32 a) (Int64.of_int32 b) in
   let result_low = Int64.shift_right result_high 16 in
   Int64.to_int32 result_low
 
-let div (a : t) (b : t) =
+let div (a : t) (b : t) : t =
   let a_high = Int64.shift_left (Int64.of_int32 a) 16 in
   let result = Int64.div a_high (Int64.of_int32 b) in
   Int64.to_int32 result
+
+let modulo (a : t) (b : t) : t =
+  (* TODO not sure if this is correct *)
+  let a_whole = whole_int_of a in
+  assert (a_whole >= 0);
+  let a_fraction = fraction_int_of a in
+  assert (a_fraction >= 0);
+  let b = int_of b in
+  assert (b > 0);
+  of_ints (a_whole mod b) a_fraction
+
+let neg (n : t) : t = Int32.neg n

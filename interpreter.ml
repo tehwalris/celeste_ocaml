@@ -12,6 +12,7 @@ type value =
   | VString of string
   | VNil
   | VPointer of heap_id
+[@@deriving show]
 
 type heap_value =
   | HValue of value
@@ -66,6 +67,37 @@ let state_heap_update (state : state) (update : heap_value -> heap_value)
   { state with heap = HeapIdMap.add heap_id new_heap_value state.heap }
 
 type terminator_result = Ret of value option | Br of Ir.label
+
+let interpret_unary_op (op : string) (v : value) : value =
+  match (op, v) with
+  | "-", VNumber v -> VNumber (Pico_number.neg v)
+  | "not", VBool v -> VBool (not v)
+  | op, v ->
+      failwith @@ Printf.sprintf "Unsupported unary op: %s %s" op (show_value v)
+
+let interpret_binary_op (l : value) (op : string) (r : value) : value =
+  match (l, op, r) with
+  | VNumber l, "+", VNumber r -> VNumber (Pico_number.add l r)
+  | VNumber l, "-", VNumber r -> VNumber (Pico_number.sub l r)
+  | VNumber l, "*", VNumber r -> VNumber (Pico_number.mul l r)
+  | VNumber l, "/", VNumber r -> VNumber (Pico_number.div l r)
+  | VNumber l, "%", VNumber r -> VNumber (Pico_number.modulo l r)
+  | VNumber l, "<", VNumber r -> VBool (Int32.compare l r < 0)
+  | VNumber l, "<=", VNumber r -> VBool (Int32.compare l r <= 0)
+  | VNumber l, ">", VNumber r -> VBool (Int32.compare l r > 0)
+  | VNumber l, ">=", VNumber r -> VBool (Int32.compare l r >= 0)
+  | VNumber l, "==", VNumber r -> VBool (Int32.compare l r = 0)
+  | VNumber l, "~=", VNumber r -> VBool (Int32.compare l r <> 0)
+  | VString l, "..", VString r -> VString (l ^ r)
+  | VString l, "..", VNumber r ->
+      VString (l ^ Int.to_string @@ Pico_number.int_of r)
+  | VNumber l, "..", VString r ->
+      VString ((Int.to_string @@ Pico_number.int_of l) ^ r)
+  | VString l, "==", VString r -> VBool (String.equal l r)
+  | l, op, r ->
+      failwith
+      @@ Printf.sprintf "Unsupported binary op: %s %s %s" (show_value l) op
+           (show_value r)
 
 let rec interpret_instruction (fixed_env : fixed_env) (state : state)
     (insn : Ir.instruction) : state * value =
@@ -229,8 +261,13 @@ let rec interpret_instruction (fixed_env : fixed_env) (state : state)
           in
           (state, Option.value return_value ~default:VNil)
       | _ -> failwith "Calling something that's not a function")
-  | UnaryOp _ -> failwith "TODO UnaryOp instruction not implemented"
-  | BinaryOp _ -> failwith "TODO BinaryOp instruction not implemented"
+  | UnaryOp (op, local_id) ->
+      let value = Ir.LocalIdMap.find local_id state.local_env in
+      (state, interpret_unary_op op value)
+  | BinaryOp (left_local_id, op, right_local_id) ->
+      let left_value = Ir.LocalIdMap.find left_local_id state.local_env in
+      let right_value = Ir.LocalIdMap.find right_local_id state.local_env in
+      (state, interpret_binary_op left_value op right_value)
   | Phi _ -> failwith "TODO Phi instruction not implemented"
 
 and interpret_terminator (state : state) (terminator : Ir.terminator) :

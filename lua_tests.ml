@@ -26,7 +26,10 @@ let run_real_lua lua_code =
   let handle_print_from_lua state =
     if Lua.gettop state <> 1 then failwith "Wrong number of arguments";
     let s =
-      if Lua.isnil state 1 then "nil" else Option.get @@ Lua.tostring state 1
+      if Lua.isnil state 1 then "nil"
+      else if Lua.isboolean state 1 then
+        if Lua.toboolean state 1 then "true" else "false"
+      else Option.get @@ Lua.tostring state 1
     in
     collected_prints := s :: !collected_prints;
     0
@@ -46,8 +49,9 @@ let run_our_lua lua_code =
    fun state args ->
     let s =
       match args with
-      | [ Interpreter.VString s ] -> s
       | [ Interpreter.VNumber n ] -> Int.to_string @@ Pico_number.int_of n
+      | [ Interpreter.VBool b ] -> if b then "true" else "false"
+      | [ Interpreter.VString s ] -> s
       | [ Interpreter.VNil ] -> "nil"
       | _ -> failwith "Wrong args"
     in
@@ -77,5 +81,6 @@ let test_lua filename =
 let%test_unit _ = test_lua "every_kind_of_if_else.lua"
 let%test_unit _ = test_lua "hello_world.lua"
 let%test_unit _ = test_lua "if_scopes.lua"
+let%test_unit _ = test_lua "normal_operators.lua"
 let%test_unit _ = test_lua "properties.lua"
 let%test_unit _ = test_lua "scopes.lua"
