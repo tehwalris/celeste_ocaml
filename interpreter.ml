@@ -66,7 +66,11 @@ let state_heap_update (state : state) (update : heap_value -> heap_value)
   let new_heap_value = update old_heap_value in
   { state with heap = HeapIdMap.add heap_id new_heap_value state.heap }
 
-type terminator_result = Ret of value option | Br of Ir.label
+type terminator_result =
+  (* each item corresponds to an input state *)
+  | Ret of value list option
+  (* each item might _not_ correspond to an input state *)
+  | Br of (Ir.label * state) list
 
 let interpret_unary_op (op : string) (v : value) : value =
   match (op, v) with
@@ -310,19 +314,30 @@ let rec interpret_instruction (fixed_env : fixed_env) (states : state list)
       in
       (results, source_block_for_phi)
 
-and interpret_terminator (state : state) (terminator : Ir.terminator) :
+and interpret_terminator (states : state list) (terminator : Ir.terminator) :
     terminator_result =
   match terminator with
   | Ir.Ret (Some local_id) ->
-      let value = Ir.LocalIdMap.find local_id state.local_env in
-      Ret (Some value)
+      let return_values =
+        List.map
+          (fun state -> Ir.LocalIdMap.find local_id state.local_env)
+          states
+      in
+      Ret (Some return_values)
   | Ir.Ret None -> Ret None
-  | Ir.Br label -> Br label
-  | Ir.Cbr (local_id, true_label, false_label) -> (
-      match Ir.LocalIdMap.find local_id state.local_env with
-      | VBool true -> Br true_label
-      | VBool false -> Br false_label
-      | _ -> failwith "Cbr called on non-boolean value")
+  | Ir.Br label -> Br (List.map (fun state -> (label, state)) states)
+  | Ir.Cbr (local_id, true_label, false_label) ->
+      Br
+        (List.map
+           (fun state ->
+             let label =
+               match Ir.LocalIdMap.find local_id state.local_env with
+               | VBool true -> true_label
+               | VBool false -> false_label
+               | _ -> failwith "Cbr called on non-boolean value"
+             in
+             (label, state))
+           states)
 
 and interpret_block_single_state (fixed_env : fixed_env) (state : state)
     (source_block_for_phi : Ir.label option) (block : Ir.block) :
@@ -348,7 +363,7 @@ and interpret_block_single_state (fixed_env : fixed_env) (state : state)
       block.instructions
   in
   let _, terminator = block.terminator in
-  let terminator_result = interpret_terminator state terminator in
+  let terminator_result = interpret_terminator [ state ] terminator in
   (state, terminator_result)
 
 and interpret_cfg_single_state (fixed_env : fixed_env) (state : state)
@@ -358,10 +373,16 @@ and interpret_cfg_single_state (fixed_env : fixed_env) (state : state)
       interpret_block_single_state fixed_env state source_block_for_phi block
     in
     match terminator_result with
-    | Ret value -> (state, value)
-    | Br label ->
+    | Ret (Some [ value ]) -> (state, Some value)
+    | Ret (Some l) ->
+        failwith
+        @@ Printf.sprintf "Ret contained %d values, expected 1"
+        @@ List.length l
+    | Ret None -> (state, None)
+    | Br [ (label, state) ] ->
         interpret_block_rec state block_label (Some label)
         @@ List.assoc label cfg.named
+    | Br _ -> failwith "Br returned multiple states"
   in
   interpret_block_rec state None None cfg.entry
 
