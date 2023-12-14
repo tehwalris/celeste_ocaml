@@ -38,6 +38,7 @@ type state = {
   heap : heap_value HeapIdMap.t;
   local_env : value Ir.LocalIdMap.t;
   global_env : heap_id StringMap.t;
+  prints : string list;
 }
 
 type builtin_fun = state -> value list -> state
@@ -285,9 +286,10 @@ let rec interpret_instruction (fixed_env : fixed_env) (states : state list)
               in
               let state =
                 {
-                  state with
                   heap = inner_state.heap;
+                  local_env = state.local_env;
                   global_env = inner_state.global_env;
+                  prints = inner_state.prints;
                 }
               in
               (state, Option.value return_value ~default:VNil)
@@ -393,6 +395,7 @@ let init (fun_defs : Ir.fun_def list) (builtins : (string * builtin_fun) list) :
       heap = HeapIdMap.empty;
       local_env = Ir.LocalIdMap.empty;
       global_env = StringMap.empty;
+      prints = [];
     }
   in
   let state =

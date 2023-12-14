@@ -44,7 +44,6 @@ let run_real_lua lua_code =
   List.rev !collected_prints
 
 let run_our_lua lua_code =
-  let collected_prints = ref [] in
   let handle_print_from_lua : Interpreter.builtin_fun =
    fun state args ->
     let s =
@@ -55,8 +54,7 @@ let run_our_lua lua_code =
       | [ Interpreter.VNil ] -> "nil"
       | _ -> failwith "Wrong args"
     in
-    collected_prints := s :: !collected_prints;
-    state
+    { state with Interpreter.prints = s :: state.prints }
   in
   let ast = Lua_parser.Parse.parse_from_string lua_code in
   let stream = Frontend.compile_top_level_ast ast in
@@ -64,11 +62,11 @@ let run_our_lua lua_code =
   let fixed_env, state =
     Interpreter.init fun_defs [ ("print", handle_print_from_lua) ]
   in
-  let _, return_value =
+  let state, return_value =
     Interpreter.interpret_cfg_single_state fixed_env state cfg
   in
   if return_value <> None then failwith "Unexpected return value";
-  List.rev !collected_prints
+  List.rev state.Interpreter.prints
 
 let test_lua filename =
   let lua_code =
