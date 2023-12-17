@@ -12,4 +12,5 @@
     (ocamlgraph (>= 2.0.0))
     (ppx_deriving (>= 5.2.1))
     (ppx_inline_test (>= 0.14.1))
-    (lua_lib (>= 1.8))))
+    (ocaml-lua (>= 1.8))
+    (re (>= 1.10.4))))

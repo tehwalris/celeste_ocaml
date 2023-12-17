@@ -11,7 +11,7 @@
   lua_tests
   pico_number
   remove_dead_instructions)
- (libraries bigarray lua_parser.lib batteries tqdm ocamlgraph ocaml-lua)
+ (libraries bigarray lua_parser.lib batteries tqdm ocamlgraph ocaml-lua re)
  (inline_tests
   (deps
    (glob_files lua_tests/*.lua)))
