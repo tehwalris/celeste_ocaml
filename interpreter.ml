@@ -9,6 +9,7 @@ let gen_heap_id : unit -> heap_id =
 type value =
   | VNumber of Pico_number.t
   | VBool of bool
+  | VUnknownBool
   | VString of string
   | VNil
   | VPointer of heap_id
@@ -77,6 +78,7 @@ let interpret_unary_op (op : string) (v : value) : value =
   match (op, v) with
   | "-", VNumber v -> VNumber (Pico_number.neg v)
   | "not", VBool v -> VBool (not v)
+  | "not", VUnknownBool -> VUnknownBool
   | op, v ->
       failwith @@ Printf.sprintf "Unsupported unary op: %s %s" op (show_value v)
 
@@ -329,15 +331,16 @@ and interpret_terminator (states : state list) (terminator : Ir.terminator) :
   | Ir.Br label -> Br (List.map (fun state -> (label, state)) states)
   | Ir.Cbr (local_id, true_label, false_label) ->
       Br
-        (List.map
+        (List.concat_map
            (fun state ->
-             let label =
+             let labels =
                match Ir.LocalIdMap.find local_id state.local_env with
-               | VBool true -> true_label
-               | VBool false -> false_label
+               | VBool true -> [ true_label ]
+               | VBool false -> [ false_label ]
+               | VUnknownBool -> [ true_label; false_label ]
                | _ -> failwith "Cbr called on non-boolean value"
              in
-             (label, state))
+             List.map (fun label -> (label, state)) labels)
            states)
 
 and interpret_block_single_state (fixed_env : fixed_env) (state : state)

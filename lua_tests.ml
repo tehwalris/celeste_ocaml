@@ -67,8 +67,7 @@ let run_our_lua lua_code =
   let builtin_new_unknown_boolean : Interpreter.builtin_fun =
    fun state args ->
     assert (args = []);
-    (* TODO return an actual unknown boolean*)
-    (state, VBool true)
+    (state, VUnknownBool)
   in
 
   (* HACK the parser does not like comments at the end of the file without a trailing newline *)
