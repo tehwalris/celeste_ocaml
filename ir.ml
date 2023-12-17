@@ -58,6 +58,12 @@ end)
 let show_local_id_set s =
   s |> LocalIdSet.elements |> List.map string_of_int |> String.concat "; "
 
+module LabelMap = Map.Make (struct
+  type t = label
+
+  let compare = Stdlib.compare
+end)
+
 let instruction_map_local_ids (f : local_id -> local_id)
     (instruction : instruction) : instruction =
   match (instruction : instruction) with

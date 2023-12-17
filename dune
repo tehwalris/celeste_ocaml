@@ -2,6 +2,7 @@
  (name compiler_lib)
  (modules
   aliasing
+  block_flow
   bypass_redundant_loads
   flow
   frontend
