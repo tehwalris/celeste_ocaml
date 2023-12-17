@@ -85,3 +85,71 @@ let%test_unit _ = test_lua "normal_operators.lua"
 let%test_unit _ = test_lua "properties.lua"
 let%test_unit _ = test_lua "scopes.lua"
 let%test_unit _ = test_lua "short_circuit_operators.lua"
+
+let find_all_regex_matches pattern text =
+  let rec loop acc start =
+    match Re.exec_opt ~pos:start pattern text with
+    | Some group ->
+        let matched = Re.Group.get group 0 in
+        let match_end = Re.Group.stop group 0 in
+        loop (matched :: acc) match_end
+    | None -> acc
+  in
+  List.rev @@ loop [] 0
+
+let parse_expected_outputs text =
+  let group_pattern =
+    Re.Perl.compile_pat ~opts:[ `Multiline ]
+      {|^-- Expected output option:(?:\n-- .*)*|}
+  in
+
+  let strip_comment_start s =
+    let prefix = "-- " in
+    assert (String.starts_with ~prefix s);
+    String.sub s (String.length prefix) (String.length s - String.length prefix)
+  in
+
+  let lines_from_group s =
+    s |> String.split_on_char '\n' |> List.tl |> List.map strip_comment_start
+  in
+
+  text |> find_all_regex_matches group_pattern |> List.map lines_from_group
+
+let%test "regex thing" =
+  let text =
+    {|
+function f(v)
+  if v then
+    print("a")
+  else
+    print("b")
+  end
+  if v then
+    print("c")
+  else
+    print("d")
+  end
+end
+
+f(__new_unknown_boolean())
+
+-- Expected output option:
+-- a
+-- c
+
+-- Expected output option:
+-- a
+-- d
+
+-- Expected output option:
+-- b
+-- c
+
+-- Expected output option:
+-- b
+-- d
+  |}
+  in
+  let text = String.trim text in
+  parse_expected_outputs text
+  = [ [ "a"; "c" ]; [ "a"; "d" ]; [ "b"; "c" ]; [ "b"; "d" ] ]
