@@ -21,6 +21,13 @@ let assert_string_list_equal l_actual l_expected =
       (format_list l_actual) (format_list l_expected);
     assert false)
 
+let assert_string_list_list_equal l_actual l_expected =
+  if List.length l_actual <> List.length l_expected then
+    failwith
+    @@ Printf.sprintf "Got %d lists of strings, expected %d lists of strings"
+         (List.length l_actual) (List.length l_expected);
+  List.iter2 assert_string_list_equal l_actual l_expected
+
 let run_real_lua lua_code =
   let collected_prints = ref [] in
   let handle_print_from_lua state =
@@ -44,7 +51,7 @@ let run_real_lua lua_code =
   List.rev !collected_prints
 
 let run_our_lua lua_code =
-  let handle_print_from_lua : Interpreter.builtin_fun =
+  let builtin_print : Interpreter.builtin_fun =
    fun state args ->
     let s =
       match args with
@@ -54,13 +61,26 @@ let run_our_lua lua_code =
       | [ Interpreter.VNil ] -> "nil"
       | _ -> failwith "Wrong args"
     in
-    { state with Interpreter.prints = s :: state.prints }
+    let state = { state with Interpreter.prints = s :: state.prints } in
+    (state, VNil)
   in
-  let ast = Lua_parser.Parse.parse_from_string lua_code in
+  let builtin_new_unknown_boolean : Interpreter.builtin_fun =
+   fun state args ->
+    assert (args = []);
+    (* TODO return an actual unknown boolean*)
+    (state, VBool true)
+  in
+
+  (* HACK the parser does not like comments at the end of the file without a trailing newline *)
+  let ast = Lua_parser.Parse.parse_from_string (lua_code ^ "\n") in
   let stream = Frontend.compile_top_level_ast ast in
   let cfg, fun_defs = Frontend.cfg_of_stream stream in
   let fixed_env, state =
-    Interpreter.init fun_defs [ ("print", handle_print_from_lua) ]
+    Interpreter.init fun_defs
+      [
+        ("print", builtin_print);
+        ("__new_unknown_boolean", builtin_new_unknown_boolean);
+      ]
   in
   let state, return_value =
     Interpreter.interpret_cfg_single_state fixed_env state cfg
@@ -68,23 +88,7 @@ let run_our_lua lua_code =
   if return_value <> None then failwith "Unexpected return value";
   List.rev state.Interpreter.prints
 
-let test_lua filename =
-  let lua_code =
-    BatFile.with_file_in
-      (BatFilename.concat "lua_tests" filename)
-      BatIO.read_all
-  in
-  let expected_prints = run_real_lua lua_code in
-  let actual_prints = run_our_lua lua_code in
-  assert_string_list_equal actual_prints expected_prints
-
-let%test_unit _ = test_lua "every_kind_of_if_else.lua"
-let%test_unit _ = test_lua "hello_world.lua"
-let%test_unit _ = test_lua "if_scopes.lua"
-let%test_unit _ = test_lua "normal_operators.lua"
-let%test_unit _ = test_lua "properties.lua"
-let%test_unit _ = test_lua "scopes.lua"
-let%test_unit _ = test_lua "short_circuit_operators.lua"
+let run_our_lua_branching lua_code = [ run_our_lua lua_code ]
 
 let find_all_regex_matches pattern text =
   let rec loop acc start =
@@ -115,41 +119,31 @@ let parse_expected_outputs text =
 
   text |> find_all_regex_matches group_pattern |> List.map lines_from_group
 
-let%test "regex thing" =
-  let text =
-    {|
-function f(v)
-  if v then
-    print("a")
-  else
-    print("b")
-  end
-  if v then
-    print("c")
-  else
-    print("d")
-  end
-end
-
-f(__new_unknown_boolean())
-
--- Expected output option:
--- a
--- c
-
--- Expected output option:
--- a
--- d
-
--- Expected output option:
--- b
--- c
-
--- Expected output option:
--- b
--- d
-  |}
+let test_lua filename =
+  let lua_code =
+    BatFile.with_file_in
+      (BatFilename.concat "lua_tests" filename)
+      BatIO.read_all
   in
-  let text = String.trim text in
-  parse_expected_outputs text
-  = [ [ "a"; "c" ]; [ "a"; "d" ]; [ "b"; "c" ]; [ "b"; "d" ] ]
+  let expected_prints = run_real_lua lua_code in
+  let actual_prints = run_our_lua lua_code in
+  assert_string_list_equal actual_prints expected_prints
+
+let test_branching_lua filename =
+  let lua_code =
+    BatFile.with_file_in
+      (BatFilename.concat "lua_tests" filename)
+      BatIO.read_all
+  in
+  let expected_prints = parse_expected_outputs lua_code |> List.sort compare in
+  let actual_prints = run_our_lua_branching lua_code |> List.sort compare in
+  assert_string_list_list_equal actual_prints expected_prints
+
+let%test_unit _ = test_lua "every_kind_of_if_else.lua"
+let%test_unit _ = test_lua "hello_world.lua"
+let%test_unit _ = test_lua "if_scopes.lua"
+let%test_unit _ = test_lua "normal_operators.lua"
+let%test_unit _ = test_lua "properties.lua"
+let%test_unit _ = test_lua "scopes.lua"
+let%test_unit _ = test_lua "short_circuit_operators.lua"
+let%test_unit _ = test_branching_lua "abstract_boolean.lua"

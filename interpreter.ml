@@ -41,7 +41,7 @@ type state = {
   prints : string list;
 }
 
-type builtin_fun = state -> value list -> state
+type builtin_fun = state -> value list -> state * value
 
 type fixed_env = {
   fun_defs : Ir.fun_def list;
@@ -262,8 +262,7 @@ let rec interpret_instruction (fixed_env : fixed_env) (states : state list)
           match HeapIdMap.find fun_heap_id state.heap with
           | HBuiltinFun name ->
               let builtin_fun = List.assoc name fixed_env.builtin_funs in
-              let state = builtin_fun state arg_values in
-              (state, VNil)
+              builtin_fun state arg_values
           | HClosure (fun_global_id, captured_values) ->
               let fun_def =
                 List.find
