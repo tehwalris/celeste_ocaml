@@ -50,31 +50,36 @@ let flow_graph_of_cfg (cfg : Ir.cfg) =
 
   g
 
-let make_flow_function (block_flow : Ir.block -> 'a -> 'a)
-    (terminator_branch_flow : Ir.terminator -> Ir.label -> 'a -> 'a)
-    (terminator_return_flow : Ir.terminator -> 'a -> 'a) (cfg : Ir.cfg) :
+let make_flow_function (flow_block_phi : Ir.label -> Ir.block -> 'a -> 'a)
+    (flow_block_post_phi : Ir.block -> 'a -> 'a)
+    (flow_branch : Ir.terminator -> Ir.label -> 'a -> 'a)
+    (flow_return : Ir.terminator -> 'a -> 'a) (cfg : Ir.cfg) :
     G.E.t -> 'a option -> 'a option =
   let named_blocks = cfg.named |> List.to_seq |> Ir.LabelMap.of_seq in
   let flow_some edge =
     match edge with
-    | BeforeEntryBlock, AfterEntryBlock -> block_flow cfg.entry
+    | BeforeEntryBlock, AfterEntryBlock -> flow_block_post_phi cfg.entry
     | BeforeNamedBlock name, AfterNamedBlock other_name when name = other_name
       ->
-        block_flow (Ir.LabelMap.find name named_blocks)
+        flow_block_post_phi (Ir.LabelMap.find name named_blocks)
     | AfterEntryBlock, BeforeNamedBlock target_name ->
         let _, terminator = cfg.entry.terminator in
-        terminator_branch_flow terminator target_name
+        flow_branch terminator target_name
     | AfterNamedBlock source_name, BeforeNamedBlock target_name ->
         let source_block = Ir.LabelMap.find source_name named_blocks in
+        let target_block = Ir.LabelMap.find target_name named_blocks in
         let _, terminator = source_block.terminator in
-        terminator_branch_flow terminator target_name
+        fun v ->
+          v
+          |> flow_branch terminator target_name
+          |> flow_block_phi source_name target_block
     | AfterEntryBlock, Return ->
         let _, terminator = cfg.entry.terminator in
-        terminator_return_flow terminator
+        flow_return terminator
     | AfterNamedBlock source_name, Return ->
         let source_block = Ir.LabelMap.find source_name named_blocks in
         let _, terminator = source_block.terminator in
-        terminator_return_flow terminator
+        flow_return terminator
     | _ -> failwith "flow has unexpected edge"
   in
   let flow_option edge = Option.map @@ flow_some edge in

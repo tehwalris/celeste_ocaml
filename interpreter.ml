@@ -68,6 +68,35 @@ let state_heap_update (state : state) (update : heap_value -> heap_value)
   let new_heap_value = update old_heap_value in
   { state with heap = HeapIdMap.add heap_id new_heap_value state.heap }
 
+module StateSet = Set.Make (struct
+  type t = state
+
+  let compare = Stdlib.compare
+end)
+
+module StateAndReturnSet = Set.Make (struct
+  type t = state * value
+
+  let compare = Stdlib.compare
+end)
+
+module StateAndMaybeReturnSet = struct
+  type t = StateSet of StateSet.t | StateAndReturnSet of StateAndReturnSet.t
+
+  let union (a : t) (b : t) : t =
+    match (a, b) with
+    | StateSet a, StateSet b -> StateSet (StateSet.union a b)
+    | StateAndReturnSet a, StateAndReturnSet b ->
+        StateAndReturnSet (StateAndReturnSet.union a b)
+    | _ -> failwith "Cannot union StateSet and StateAndReturnSet"
+
+  let equal (a : t) (b : t) : bool =
+    match (a, b) with
+    | StateSet a, StateSet b -> StateSet.equal a b
+    | StateAndReturnSet a, StateAndReturnSet b -> StateAndReturnSet.equal a b
+    | _ -> false
+end
+
 type terminator_result =
   (* each item corresponds to an input state *)
   | Ret of value list option
@@ -304,6 +333,7 @@ let rec interpret_instruction (fixed_env : fixed_env) (states : state list)
           let left_value = Ir.LocalIdMap.find left_local_id state.local_env in
           let right_value = Ir.LocalIdMap.find right_local_id state.local_env in
           (state, interpret_binary_op left_value op right_value))
+  (* TODO remove source_block_for_phi once there's only the flow-based interpreter *)
   | Phi local_ids_by_label ->
       let results =
         List.map
@@ -389,6 +419,133 @@ and interpret_cfg_single_state (fixed_env : fixed_env) (state : state)
     | Br _ -> failwith "Br returned multiple states"
   in
   interpret_block_rec state None None cfg.entry
+
+and split_block_phi_instructions (block : Ir.block) =
+  let is_phi = function _, Ir.Phi _ -> true | _ -> false in
+  let unwrap_phi = function
+    | id, Ir.Phi v -> (id, v)
+    | _ -> failwith "Not a phi instruction"
+  in
+  let phi_instructions, non_phi_instructions =
+    BatList.span is_phi block.instructions
+  in
+  let phi_instructions = List.map unwrap_phi phi_instructions in
+  if List.exists is_phi non_phi_instructions then
+    failwith "Phi instructions are not at the beginning of the block";
+  (phi_instructions, non_phi_instructions)
+
+and phi_block_flow (source_block_name : Ir.label) (target_block : Ir.block)
+    (states : StateSet.t) : StateSet.t =
+  let phi_instructions, _ = split_block_phi_instructions target_block in
+  StateSet.map
+    (fun state ->
+      List.fold_left
+        (fun state (local_id, local_ids_by_label) ->
+          let value =
+            Ir.LocalIdMap.find
+              (List.assoc source_block_name local_ids_by_label)
+              state.local_env
+          in
+          {
+            state with
+            local_env = Ir.LocalIdMap.add local_id value state.local_env;
+          })
+        state phi_instructions)
+    states
+
+and post_phi_block_flow (fixed_env : fixed_env) (block : Ir.block)
+    (states : StateSet.t) : StateSet.t =
+  let _, non_phi_instructions = split_block_phi_instructions block in
+  let states =
+    states |> StateSet.to_seq |> List.of_seq |> fun states ->
+    List.fold_left
+      (fun states (local_id, insn) ->
+        let results, _ = interpret_instruction fixed_env states None insn in
+        List.map
+          (fun (state, value) ->
+            {
+              state with
+              local_env = Ir.LocalIdMap.add local_id value state.local_env;
+            })
+          results)
+      states non_phi_instructions
+  in
+  let states = StateSet.of_list states in
+  states
+
+and flow_branch (terminator : Ir.terminator) (flow_target : Ir.label)
+    (states : StateSet.t) : StateSet.t =
+  match terminator with
+  | Ir.Br terminator_target when terminator_target = flow_target -> states
+  | Ir.Cbr (local_id, true_label, false_label)
+    when flow_target = true_label || flow_target = false_label ->
+      StateSet.filter_map
+        (fun state ->
+          match Ir.LocalIdMap.find local_id state.local_env with
+          | VBool v when v = (flow_target = true_label) -> Some state
+          | VBool _ -> None
+          | VUnknownBool -> Some state
+          | _ -> failwith "Cbr called on non-boolean value")
+        states
+  | _ -> failwith "Unexpected flow"
+
+and flow_return (terminator : Ir.terminator) (states : StateSet.t) :
+    StateAndMaybeReturnSet.t =
+  match terminator with
+  | Ir.Ret (Some local_id) ->
+      StateAndMaybeReturnSet.StateAndReturnSet
+        (states |> StateSet.to_seq
+        |> Seq.map (fun state ->
+               (state, Ir.LocalIdMap.find local_id state.local_env))
+        |> StateAndReturnSet.of_seq)
+  | Ir.Ret None -> StateAndMaybeReturnSet.StateSet states
+  | _ -> failwith "Unexpected flow"
+
+and interpret_cfg_flow (fixed_env : fixed_env) (states : StateSet.t)
+    (cfg : Ir.cfg) : StateAndMaybeReturnSet.t =
+  let lift_no_return (f : StateSet.t -> StateSet.t) = function
+    | StateAndMaybeReturnSet.StateSet states ->
+        StateAndMaybeReturnSet.StateSet (f states)
+    | StateAndMaybeReturnSet.StateAndReturnSet _ ->
+        failwith "Return value in unexpected part of CFG"
+  in
+  let lift_return_out_only (f : StateSet.t -> StateAndMaybeReturnSet.t) =
+    function
+    | StateAndMaybeReturnSet.StateSet states -> f states
+    | StateAndMaybeReturnSet.StateAndReturnSet _ ->
+        failwith "Return value in unexpected part of CFG"
+  in
+  let module CfgFixpoint =
+    Graph.Fixpoint.Make
+      (Block_flow.G)
+      (struct
+        type vertex = Block_flow.G.E.vertex
+        type edge = Block_flow.G.E.t
+        type g = Block_flow.G.t
+        type data = StateAndMaybeReturnSet.t option
+
+        let direction = Graph.Fixpoint.Forward
+        let equal = Flow.lift_equal StateAndMaybeReturnSet.equal
+        let join = Flow.lift_join StateAndMaybeReturnSet.union
+
+        let analyze =
+          Block_flow.make_flow_function
+            (fun source_block_name target_block ->
+              lift_no_return @@ phi_block_flow source_block_name target_block)
+            (fun block -> lift_no_return @@ post_phi_block_flow fixed_env block)
+            (fun terminator flow_target ->
+              lift_no_return @@ flow_branch terminator flow_target)
+            (fun terminator -> lift_return_out_only @@ flow_return terminator)
+            cfg
+      end)
+  in
+  let g = Block_flow.flow_graph_of_cfg cfg in
+  let init v =
+    if Block_flow.G.in_degree g v = 0 then
+      Some (StateAndMaybeReturnSet.StateSet states)
+    else None
+  in
+  Option.get @@ CfgFixpoint.analyze init g Block_flow.Return
 
 let init (fun_defs : Ir.fun_def list) (builtins : (string * builtin_fun) list) :
     fixed_env * state =
