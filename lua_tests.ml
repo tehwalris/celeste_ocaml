@@ -83,7 +83,7 @@ let prepare_to_run_our_lua lua_code =
   in
   (cfg, fixed_env, state)
 
-let run_our_lua_branching lua_code =
+let run_our_lua_for_states lua_code =
   let cfg, fixed_env, state = prepare_to_run_our_lua lua_code in
   let states_and_maybe_returns =
     Interpreter.interpret_cfg fixed_env
@@ -96,12 +96,15 @@ let run_our_lua_branching lua_code =
     | Interpreter.StateAndMaybeReturnSet.StateAndReturnSet _ ->
         failwith "Unexpected return value"
   in
-  states |> Interpreter.StateSet.to_seq
+  states
+
+let run_our_lua_for_prints lua_code =
+  lua_code |> run_our_lua_for_states |> Interpreter.StateSet.to_seq
   |> Seq.map (fun state -> List.rev state.Interpreter.prints)
   |> List.of_seq
 
-let run_our_lua lua_code =
-  match run_our_lua_branching lua_code with
+let run_our_lua_for_prints_no_branching lua_code =
+  match run_our_lua_for_prints lua_code with
   | [ result ] -> result
   | results ->
       failwith
@@ -136,33 +139,38 @@ let parse_expected_outputs text =
 
   text |> find_all_regex_matches group_pattern |> List.map lines_from_group
 
-let test_lua filename =
-  let lua_code =
-    BatFile.with_file_in
-      (BatFilename.concat "lua_tests" filename)
-      BatIO.read_all
-  in
+let load_lua_file filename =
+  BatFile.with_file_in (BatFilename.concat "lua_tests" filename) BatIO.read_all
+
+let test_against_real_lua filename =
+  let lua_code = load_lua_file filename in
   let expected_prints = run_real_lua lua_code in
-  let actual_prints = run_our_lua lua_code in
+  let actual_prints = run_our_lua_for_prints_no_branching lua_code in
   assert_string_list_equal actual_prints expected_prints
 
-let test_branching_lua filename =
-  let lua_code =
-    BatFile.with_file_in
-      (BatFilename.concat "lua_tests" filename)
-      BatIO.read_all
-  in
+let test_branch_prints filename =
+  let lua_code = load_lua_file filename in
   let expected_prints = parse_expected_outputs lua_code |> List.sort compare in
-  let actual_prints = run_our_lua_branching lua_code |> List.sort compare in
+  let actual_prints = run_our_lua_for_prints lua_code |> List.sort compare in
   assert_string_list_list_equal actual_prints expected_prints
 
-let%test_unit _ = test_lua "call_order.lua"
-let%test_unit _ = test_lua "every_kind_of_if_else.lua"
-let%test_unit _ = test_lua "hello_world.lua"
-let%test_unit _ = test_lua "if_scopes.lua"
-let%test_unit _ = test_lua "normal_operators.lua"
-let%test_unit _ = test_lua "properties.lua"
-let%test_unit _ = test_lua "scopes.lua"
-let%test_unit _ = test_lua "short_circuit_operators.lua"
-let%test_unit _ = test_branching_lua "abstract_boolean_no_call.lua"
-let%test_unit _ = test_branching_lua "abstract_boolean.lua"
+let test_branch_count filename expected_branch_count =
+  let lua_code = load_lua_file filename in
+  let states = run_our_lua_for_states lua_code in
+  let actual_branch_count = Interpreter.StateSet.cardinal states in
+  if actual_branch_count <> expected_branch_count then
+    failwith
+    @@ Printf.sprintf "Got %d branches, expected %d" actual_branch_count
+         expected_branch_count
+
+let%test_unit _ = test_against_real_lua "call_order.lua"
+let%test_unit _ = test_against_real_lua "every_kind_of_if_else.lua"
+let%test_unit _ = test_against_real_lua "hello_world.lua"
+let%test_unit _ = test_against_real_lua "if_scopes.lua"
+let%test_unit _ = test_against_real_lua "normal_operators.lua"
+let%test_unit _ = test_against_real_lua "properties.lua"
+let%test_unit _ = test_against_real_lua "scopes.lua"
+let%test_unit _ = test_against_real_lua "short_circuit_operators.lua"
+let%test_unit _ = test_branch_prints "abstract_boolean_no_call.lua"
+let%test_unit _ = test_branch_prints "abstract_boolean.lua"
+let%test_unit _ = test_branch_count "branching_with_irrelevant_locals.lua" 1
