@@ -97,6 +97,28 @@ module StateAndMaybeReturnSet = struct
     | _ -> false
 end
 
+let analyze_live_variables cfg =
+  let module LiveVariableAnalysis =
+    Graph.Fixpoint.Make
+      (Flow.G)
+      (struct
+        type vertex = Flow.G.E.vertex
+        type edge = Flow.G.E.t
+        type g = Flow.G.t
+        type data = Ir.LocalIdSet.t option
+
+        let direction = Graph.Fixpoint.Backward
+        let equal = Flow.lift_equal Ir.LocalIdSet.equal
+        let join = Flow.lift_join Ir.LocalIdSet.union
+
+        let analyze =
+          Flow.make_flow_function Liveness.flow_instruction_live_variables
+            Liveness.flow_terminator_live_variables cfg
+      end)
+  in
+  let g = Flow.flow_graph_of_cfg cfg in
+  LiveVariableAnalysis.analyze (fun _ -> Some Ir.LocalIdSet.empty) g
+
 type terminator_result =
   (* each item corresponds to an input state *)
   | Ret of value list option
@@ -134,28 +156,6 @@ let interpret_binary_op (l : value) (op : string) (r : value) : value =
       failwith
       @@ Printf.sprintf "Unsupported binary op: %s %s %s" (show_value l) op
            (show_value r)
-
-let analyze_live_variables cfg =
-  let module LiveVariableAnalysis =
-    Graph.Fixpoint.Make
-      (Flow.G)
-      (struct
-        type vertex = Flow.G.E.vertex
-        type edge = Flow.G.E.t
-        type g = Flow.G.t
-        type data = Ir.LocalIdSet.t option
-
-        let direction = Graph.Fixpoint.Backward
-        let equal = Flow.lift_equal Ir.LocalIdSet.equal
-        let join = Flow.lift_join Ir.LocalIdSet.union
-
-        let analyze =
-          Flow.make_flow_function Liveness.flow_instruction_live_variables
-            Liveness.flow_terminator_live_variables cfg
-      end)
-  in
-  let g = Flow.flow_graph_of_cfg cfg in
-  LiveVariableAnalysis.analyze (fun _ -> Some Ir.LocalIdSet.empty) g
 
 let rec interpret_non_phi_instruction (fixed_env : fixed_env)
     (states : state list) (insn : Ir.instruction) :
