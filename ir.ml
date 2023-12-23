@@ -19,7 +19,6 @@ type instruction =
   | UnaryOp of string * local_id
   | BinaryOp of local_id * string * local_id
   | Phi of (label * local_id) list
-  | DeleteLocal of local_id
 [@@deriving show]
 
 type terminator =
@@ -87,7 +86,6 @@ let instruction_map_local_ids (f : local_id -> local_id)
   | UnaryOp (op, arg_id) -> UnaryOp (op, f arg_id)
   | BinaryOp (left_id, op, right_id) -> BinaryOp (f left_id, op, f right_id)
   | Phi branches -> Phi (List.map (fun (label, id) -> (label, f id)) branches)
-  | DeleteLocal var_id -> DeleteLocal (f var_id)
 
 let terminator_map_local_ids (f : local_id -> local_id)
     (terminator : terminator) : terminator =

@@ -20,7 +20,6 @@ let instruction_live_if_output_unused (instruction : Ir.instruction)
   | UnaryOp _ -> false
   | BinaryOp _ -> false
   | Phi _ -> false
-  | DeleteLocal _ -> true
 
 let remove_dead_instructions (cfg : Ir.cfg) : Ir.cfg =
   let module AliasAnalysis =
