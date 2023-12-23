@@ -27,3 +27,4 @@ let flow_instruction_aliasing
         |> Option.is_some
       then Ir.LocalIdSet.add out_id no_alias_out
       else no_alias_out
+  | DeleteLocal _ -> no_alias_out

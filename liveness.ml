@@ -2,13 +2,15 @@ let flow_instruction_live_variables
     ((out_id : Ir.local_id), (instruction : Ir.instruction))
     (in_live : Ir.LocalIdSet.t) : Ir.LocalIdSet.t =
   let arg_ids = ref [] in
-  let _ =
-    Ir.instruction_map_local_ids
-      (fun id ->
-        arg_ids := id :: !arg_ids;
-        id)
-      instruction
-  in
+  (match instruction with
+  | Ir.DeleteLocal _ -> ()
+  | _ ->
+      ignore
+      @@ Ir.instruction_map_local_ids
+           (fun id ->
+             arg_ids := id :: !arg_ids;
+             id)
+           instruction);
   let arg_ids = !arg_ids in
   in_live
   |> Ir.LocalIdSet.remove out_id

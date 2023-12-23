@@ -348,6 +348,10 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
           let right_value = Ir.LocalIdMap.find right_local_id state.local_env in
           (state, interpret_binary_op left_value op right_value))
   | Phi _ -> failwith "Phi nodes should be handled by phi_block_flow"
+  | DeleteLocal local_id ->
+      handle_separately_no_phi (fun state ->
+          let local_env = Ir.LocalIdMap.remove local_id state.local_env in
+          ({ state with local_env }, VNil))
 
 and interpret_terminator (states : state list) (terminator : Ir.terminator) :
     terminator_result =

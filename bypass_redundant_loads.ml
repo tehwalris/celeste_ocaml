@@ -109,7 +109,8 @@ let flow_function_of_cfg =
             with
             known_stores =
               remove_potentially_aliased_stores base_out_fact.known_stores;
-          })
+          }
+      | DeleteLocal _ -> base_out_fact)
     (fun _terminator in_fact -> in_fact)
 
 let bypass_redundant_loads (cfg : Ir.cfg) : Ir.cfg =
