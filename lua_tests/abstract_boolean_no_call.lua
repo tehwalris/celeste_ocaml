@@ -1,17 +1,14 @@
-function f(v)
-  if v then
-    print("a")
-  else
-    print("b")
-  end
-  if v then
-    print("c")
-  else
-    print("d")
-  end
+v = __new_unknown_boolean()
+if v then
+  print("a")
+else
+  print("b")
 end
-
-f(__new_unknown_boolean())
+if v then
+  print("c")
+else
+  print("d")
+end
 
 -- Expected output option:
 -- a

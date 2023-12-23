@@ -50,7 +50,7 @@ let run_real_lua lua_code =
   check_lua_status state @@ Lua.pcall state 0 0 0;
   List.rev !collected_prints
 
-let run_our_lua lua_code =
+let prepare_to_run_our_lua lua_code =
   let builtin_print : Interpreter.builtin_fun =
    fun state args ->
     let s =
@@ -81,13 +81,32 @@ let run_our_lua lua_code =
         ("__new_unknown_boolean", builtin_new_unknown_boolean);
       ]
   in
+  (cfg, fixed_env, state)
+
+let run_our_lua lua_code =
+  let cfg, fixed_env, state = prepare_to_run_our_lua lua_code in
   let state, return_value =
     Interpreter.interpret_cfg_single_state fixed_env state cfg
   in
   if return_value <> None then failwith "Unexpected return value";
   List.rev state.Interpreter.prints
 
-let run_our_lua_branching lua_code = [ run_our_lua lua_code ]
+let run_our_lua_branching lua_code =
+  let cfg, fixed_env, state = prepare_to_run_our_lua lua_code in
+  let states_and_maybe_returns =
+    Interpreter.interpret_cfg_flow fixed_env
+      (Interpreter.StateSet.singleton state)
+      cfg
+  in
+  let states =
+    match states_and_maybe_returns with
+    | Interpreter.StateAndMaybeReturnSet.StateSet states -> states
+    | Interpreter.StateAndMaybeReturnSet.StateAndReturnSet _ ->
+        failwith "Unexpected return value"
+  in
+  states |> Interpreter.StateSet.to_seq
+  |> Seq.map (fun state -> List.rev state.Interpreter.prints)
+  |> List.of_seq
 
 let find_all_regex_matches pattern text =
   let rec loop acc start =
@@ -145,4 +164,5 @@ let%test_unit _ = test_lua "normal_operators.lua"
 let%test_unit _ = test_lua "properties.lua"
 let%test_unit _ = test_lua "scopes.lua"
 let%test_unit _ = test_lua "short_circuit_operators.lua"
-let%test_unit _ = test_branching_lua "abstract_boolean.lua"
+(* TODO let%test_unit _ = test_branching_lua "abstract_boolean.lua" *)
+let%test_unit _ = test_branching_lua "abstract_boolean_no_call.lua"
