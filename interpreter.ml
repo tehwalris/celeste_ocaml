@@ -119,6 +119,51 @@ let analyze_live_variables cfg =
   let g = Flow.flow_graph_of_cfg cfg in
   LiveVariableAnalysis.analyze (fun _ -> Some Ir.LocalIdSet.empty) g
 
+let map_value_references f v : value =
+  match v with
+  | VNumber _ -> v
+  | VBool _ -> v
+  | VUnknownBool -> v
+  | VString _ -> v
+  | VNil -> v
+  | VPointer heap_id -> VPointer (f heap_id)
+
+let map_heap_value_references f v : heap_value =
+  match v with
+  | HValue value -> HValue (map_value_references f value)
+  | HObjectTable items -> HObjectTable (List.map (fun (k, v) -> (k, f v)) items)
+  | HArrayTable items -> HArrayTable (List.map f items)
+  | HUnknownTable -> HUnknownTable
+  | HClosure (global_id, captures) ->
+      HClosure (global_id, List.map (map_value_references f) captures)
+  | HBuiltinFun name -> HBuiltinFun name
+
+let gc_heap (state : state) : state =
+  let old_heap = state.heap in
+  let new_heap = ref HeapIdMap.empty in
+  let new_ids_by_old_ids = ref HeapIdMap.empty in
+  let rec visit old_id =
+    match HeapIdMap.find_opt old_id !new_ids_by_old_ids with
+    | Some new_id -> new_id
+    | None ->
+        let new_id = HeapIdMap.cardinal !new_ids_by_old_ids in
+        new_ids_by_old_ids := HeapIdMap.add old_id new_id !new_ids_by_old_ids;
+        assert (not (HeapIdMap.mem new_id !new_heap));
+        let visited_value =
+          map_heap_value_references visit (HeapIdMap.find old_id old_heap)
+        in
+        new_heap := HeapIdMap.add new_id visited_value !new_heap;
+        new_id
+  in
+  let state =
+    {
+      state with
+      global_env = StringMap.map visit state.global_env;
+      local_env = Ir.LocalIdMap.map (map_value_references visit) state.local_env;
+    }
+  in
+  { state with heap = !new_heap }
+
 type terminator_result =
   (* each item corresponds to an input state *)
   | Ret of value list option
@@ -451,13 +496,16 @@ and flow_block_before_join
   in
   StateSet.map
     (fun state ->
-      {
-        state with
-        local_env =
-          Ir.LocalIdMap.filter
-            (fun local_id _ -> Ir.LocalIdSet.mem local_id live_variables)
-            state.local_env;
-      })
+      let state =
+        {
+          state with
+          local_env =
+            Ir.LocalIdMap.filter
+              (fun local_id _ -> Ir.LocalIdSet.mem local_id live_variables)
+              state.local_env;
+        }
+      in
+      gc_heap state)
     states
 
 and flow_block_post_phi (fixed_env : fixed_env) (block : Ir.block)
