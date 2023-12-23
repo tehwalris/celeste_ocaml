@@ -135,6 +135,28 @@ let interpret_binary_op (l : value) (op : string) (r : value) : value =
       @@ Printf.sprintf "Unsupported binary op: %s %s %s" (show_value l) op
            (show_value r)
 
+let analyze_live_variables cfg =
+  let module LiveVariableAnalysis =
+    Graph.Fixpoint.Make
+      (Flow.G)
+      (struct
+        type vertex = Flow.G.E.vertex
+        type edge = Flow.G.E.t
+        type g = Flow.G.t
+        type data = Ir.LocalIdSet.t option
+
+        let direction = Graph.Fixpoint.Backward
+        let equal = Flow.lift_equal Ir.LocalIdSet.equal
+        let join = Flow.lift_join Ir.LocalIdSet.union
+
+        let analyze =
+          Flow.make_flow_function Liveness.flow_instruction_live_variables
+            Liveness.flow_terminator_live_variables cfg
+      end)
+  in
+  let g = Flow.flow_graph_of_cfg cfg in
+  LiveVariableAnalysis.analyze (fun _ -> Some Ir.LocalIdSet.empty) g
+
 let rec interpret_non_phi_instruction (fixed_env : fixed_env)
     (states : state list) (insn : Ir.instruction) :
     (state * value) list * Ir.label option =
@@ -412,6 +434,32 @@ and flow_block_phi (source_block_name : Ir.label) (target_block : Ir.block)
         state phi_instructions)
     states
 
+and flow_block_before_join
+    (live_variable_analysis :
+      Flow.flow_side * Ir.local_id -> Ir.LocalIdSet.t option)
+    (target_block : Ir.block) (states : StateSet.t) : StateSet.t =
+  let terminator_local_id, _ = target_block.terminator in
+  let first_non_phi_local_id =
+    target_block.instructions
+    |> List.find_map (function
+         | _, Ir.Phi _ -> None
+         | local_id, _ -> Some local_id)
+    |> Option.value ~default:terminator_local_id
+  in
+  let live_variables =
+    Option.get @@ live_variable_analysis (Flow.Before, first_non_phi_local_id)
+  in
+  StateSet.map
+    (fun state ->
+      {
+        state with
+        local_env =
+          Ir.LocalIdMap.filter
+            (fun local_id _ -> Ir.LocalIdSet.mem local_id live_variables)
+            state.local_env;
+      })
+    states
+
 and flow_block_post_phi (fixed_env : fixed_env) (block : Ir.block)
     (states : StateSet.t) : StateSet.t =
   let _, non_phi_instructions = split_block_phi_instructions block in
@@ -474,6 +522,7 @@ and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
     | StateAndMaybeReturnSet.StateAndReturnSet _ ->
         failwith "Return value in unexpected part of CFG"
   in
+  let live_variable_analysis = analyze_live_variables cfg in
   let module CfgFixpoint =
     Graph.Fixpoint.Make
       (Block_flow.G)
@@ -491,6 +540,9 @@ and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
           Block_flow.make_flow_function
             (fun source_block_name target_block ->
               lift_no_return @@ flow_block_phi source_block_name target_block)
+            (fun target_block ->
+              lift_no_return
+              @@ flow_block_before_join live_variable_analysis target_block)
             (fun block -> lift_no_return @@ flow_block_post_phi fixed_env block)
             (fun terminator flow_target ->
               lift_no_return @@ flow_branch terminator flow_target)

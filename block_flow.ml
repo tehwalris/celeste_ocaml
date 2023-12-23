@@ -51,6 +51,7 @@ let flow_graph_of_cfg (cfg : Ir.cfg) =
   g
 
 let make_flow_function (flow_block_phi : Ir.label -> Ir.block -> 'a -> 'a)
+    (flow_block_before_join : Ir.block -> 'a -> 'a)
     (flow_block_post_phi : Ir.block -> 'a -> 'a)
     (flow_branch : Ir.terminator -> Ir.label -> 'a -> 'a)
     (flow_return : Ir.terminator -> 'a -> 'a) (cfg : Ir.cfg) :
@@ -64,7 +65,11 @@ let make_flow_function (flow_block_phi : Ir.label -> Ir.block -> 'a -> 'a)
         flow_block_post_phi (Ir.LabelMap.find name named_blocks)
     | AfterEntryBlock, BeforeNamedBlock target_name ->
         let _, terminator = cfg.entry.terminator in
-        flow_branch terminator target_name
+        let target_block = Ir.LabelMap.find target_name named_blocks in
+        fun v ->
+          v
+          |> flow_branch terminator target_name
+          |> flow_block_before_join target_block
     | AfterNamedBlock source_name, BeforeNamedBlock target_name ->
         let source_block = Ir.LabelMap.find source_name named_blocks in
         let target_block = Ir.LabelMap.find target_name named_blocks in
@@ -73,6 +78,7 @@ let make_flow_function (flow_block_phi : Ir.label -> Ir.block -> 'a -> 'a)
           v
           |> flow_branch terminator target_name
           |> flow_block_phi source_name target_block
+          |> flow_block_before_join target_block
     | AfterEntryBlock, Return ->
         let _, terminator = cfg.entry.terminator in
         flow_return terminator
