@@ -282,48 +282,62 @@ let rec interpret_instruction (fixed_env : fixed_env) (states : state list)
       handle_separately_no_phi (fun state -> (state, VString v))
   | NilConstant -> handle_separately_no_phi (fun state -> (state, VNil))
   | Call (fun_local_id, arg_local_ids) ->
-      (* TODO Process the whole (state list) at once when calling, instead of handling each state separately. *)
-      handle_separately_no_phi (fun state ->
-          let arg_values =
-            List.map
-              (fun id -> Ir.LocalIdMap.find id state.local_env)
-              arg_local_ids
-          in
-          let fun_heap_id = heap_id_from_pointer_local state fun_local_id in
-          match HeapIdMap.find fun_heap_id state.heap with
-          | HBuiltinFun name ->
-              let builtin_fun = List.assoc name fixed_env.builtin_funs in
-              builtin_fun state arg_values
-          | HClosure (fun_global_id, captured_values) ->
-              let fun_def =
-                List.find
-                  (fun def -> def.Ir.name = fun_global_id)
-                  fixed_env.fun_defs
-              in
-              let inner_state : state =
-                {
-                  state with
-                  local_env =
-                    List.fold_left2
-                      (fun locals id value -> Ir.LocalIdMap.add id value locals)
-                      Ir.LocalIdMap.empty
-                      (fun_def.Ir.capture_ids @ fun_def.Ir.arg_ids)
-                      (captured_values @ arg_values);
-                }
-              in
-              let inner_state, return_value =
-                interpret_cfg_single_state fixed_env inner_state fun_def.cfg
-              in
-              let state =
-                {
-                  heap = inner_state.heap;
-                  local_env = state.local_env;
-                  global_env = inner_state.global_env;
-                  prints = inner_state.prints;
-                }
-              in
-              (state, Option.value return_value ~default:VNil)
-          | _ -> failwith "Calling something that's not a function")
+      let results =
+        List.concat_map
+          (fun state ->
+            let arg_values =
+              List.map
+                (fun id -> Ir.LocalIdMap.find id state.local_env)
+                arg_local_ids
+            in
+            let fun_heap_id = heap_id_from_pointer_local state fun_local_id in
+            match HeapIdMap.find fun_heap_id state.heap with
+            | HBuiltinFun name ->
+                let builtin_fun = List.assoc name fixed_env.builtin_funs in
+                [ builtin_fun state arg_values ]
+            | HClosure (fun_global_id, captured_values) ->
+                let fun_def =
+                  List.find
+                    (fun def -> def.Ir.name = fun_global_id)
+                    fixed_env.fun_defs
+                in
+                let inner_state : state =
+                  {
+                    state with
+                    local_env =
+                      List.fold_left2
+                        (fun locals id value ->
+                          Ir.LocalIdMap.add id value locals)
+                        Ir.LocalIdMap.empty
+                        (fun_def.Ir.capture_ids @ fun_def.Ir.arg_ids)
+                        (captured_values @ arg_values);
+                  }
+                in
+                interpret_cfg_flow fixed_env
+                  (StateSet.singleton inner_state)
+                  fun_def.cfg
+                |> (function
+                     | StateAndMaybeReturnSet.StateSet inner_states ->
+                         inner_states |> StateSet.to_seq
+                         |> Seq.map (fun inner_state -> (inner_state, VNil))
+                     | StateAndMaybeReturnSet.StateAndReturnSet
+                         inner_states_and_returns ->
+                         inner_states_and_returns |> StateAndReturnSet.to_seq)
+                |> Seq.map (fun (inner_state, return_value) ->
+                       let state =
+                         {
+                           heap = inner_state.heap;
+                           local_env = state.local_env;
+                           global_env = inner_state.global_env;
+                           prints = inner_state.prints;
+                         }
+                       in
+                       (state, return_value))
+                |> List.of_seq
+            | _ -> failwith "Calling something that's not a function")
+          states
+      in
+      (results, None)
   | UnaryOp (op, local_id) ->
       handle_separately_no_phi (fun state ->
           let value = Ir.LocalIdMap.find local_id state.local_env in

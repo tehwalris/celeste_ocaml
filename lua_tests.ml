@@ -164,5 +164,5 @@ let%test_unit _ = test_lua "normal_operators.lua"
 let%test_unit _ = test_lua "properties.lua"
 let%test_unit _ = test_lua "scopes.lua"
 let%test_unit _ = test_lua "short_circuit_operators.lua"
-(* TODO let%test_unit _ = test_branching_lua "abstract_boolean.lua" *)
+let%test_unit _ = test_branching_lua "abstract_boolean.lua"
 let%test_unit _ = test_branching_lua "abstract_boolean_no_call.lua"
