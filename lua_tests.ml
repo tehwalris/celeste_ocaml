@@ -83,18 +83,10 @@ let prepare_to_run_our_lua lua_code =
   in
   (cfg, fixed_env, state)
 
-let run_our_lua lua_code =
-  let cfg, fixed_env, state = prepare_to_run_our_lua lua_code in
-  let state, return_value =
-    Interpreter.interpret_cfg_single_state fixed_env state cfg
-  in
-  if return_value <> None then failwith "Unexpected return value";
-  List.rev state.Interpreter.prints
-
 let run_our_lua_branching lua_code =
   let cfg, fixed_env, state = prepare_to_run_our_lua lua_code in
   let states_and_maybe_returns =
-    Interpreter.interpret_cfg_flow fixed_env
+    Interpreter.interpret_cfg fixed_env
       (Interpreter.StateSet.singleton state)
       cfg
   in
@@ -107,6 +99,13 @@ let run_our_lua_branching lua_code =
   states |> Interpreter.StateSet.to_seq
   |> Seq.map (fun state -> List.rev state.Interpreter.prints)
   |> List.of_seq
+
+let run_our_lua lua_code =
+  match run_our_lua_branching lua_code with
+  | [ result ] -> result
+  | results ->
+      failwith
+      @@ Printf.sprintf "Expected 1 branch, got %d" (List.length results)
 
 let find_all_regex_matches pattern text =
   let rec loop acc start =

@@ -135,8 +135,8 @@ let interpret_binary_op (l : value) (op : string) (r : value) : value =
       @@ Printf.sprintf "Unsupported binary op: %s %s %s" (show_value l) op
            (show_value r)
 
-let rec interpret_instruction (fixed_env : fixed_env) (states : state list)
-    (source_block_for_phi : Ir.label option) (insn : Ir.instruction) :
+let rec interpret_non_phi_instruction (fixed_env : fixed_env)
+    (states : state list) (insn : Ir.instruction) :
     (state * value) list * Ir.label option =
   let handle_separately_no_phi (f : state -> state * value) :
       (state * value) list * Ir.label option =
@@ -313,7 +313,7 @@ let rec interpret_instruction (fixed_env : fixed_env) (states : state list)
                         (captured_values @ arg_values);
                   }
                 in
-                interpret_cfg_flow fixed_env
+                interpret_cfg fixed_env
                   (StateSet.singleton inner_state)
                   fun_def.cfg
                 |> (function
@@ -347,19 +347,7 @@ let rec interpret_instruction (fixed_env : fixed_env) (states : state list)
           let left_value = Ir.LocalIdMap.find left_local_id state.local_env in
           let right_value = Ir.LocalIdMap.find right_local_id state.local_env in
           (state, interpret_binary_op left_value op right_value))
-  (* TODO remove source_block_for_phi once there's only the flow-based interpreter *)
-  | Phi local_ids_by_label ->
-      let results =
-        List.map
-          (fun state ->
-            let local_id =
-              List.assoc (Option.get source_block_for_phi) local_ids_by_label
-            in
-            let value = Ir.LocalIdMap.find local_id state.local_env in
-            (state, value))
-          states
-      in
-      (results, source_block_for_phi)
+  | Phi _ -> failwith "Phi nodes should be handled by phi_block_flow"
 
 and interpret_terminator (states : state list) (terminator : Ir.terminator) :
     terminator_result =
@@ -387,53 +375,6 @@ and interpret_terminator (states : state list) (terminator : Ir.terminator) :
              List.map (fun label -> (label, state)) labels)
            states)
 
-and interpret_block_single_state (fixed_env : fixed_env) (state : state)
-    (source_block_for_phi : Ir.label option) (block : Ir.block) :
-    state * terminator_result =
-  let state, _ =
-    List.fold_left
-      (fun (state, source_block_for_phi) (local_id, insn) ->
-        let results, source_block_for_phi =
-          interpret_instruction fixed_env [ state ] source_block_for_phi insn
-        in
-        if List.length results <> 1 then
-          failwith
-            "State branched while interpreting block in single state mode";
-        let state, value = List.hd results in
-        let state =
-          {
-            state with
-            local_env = Ir.LocalIdMap.add local_id value state.local_env;
-          }
-        in
-        (state, source_block_for_phi))
-      (state, source_block_for_phi)
-      block.instructions
-  in
-  let _, terminator = block.terminator in
-  let terminator_result = interpret_terminator [ state ] terminator in
-  (state, terminator_result)
-
-and interpret_cfg_single_state (fixed_env : fixed_env) (state : state)
-    (cfg : Ir.cfg) : state * value option =
-  let rec interpret_block_rec state source_block_for_phi block_label block =
-    let state, terminator_result =
-      interpret_block_single_state fixed_env state source_block_for_phi block
-    in
-    match terminator_result with
-    | Ret (Some [ value ]) -> (state, Some value)
-    | Ret (Some l) ->
-        failwith
-        @@ Printf.sprintf "Ret contained %d values, expected 1"
-        @@ List.length l
-    | Ret None -> (state, None)
-    | Br [ (label, state) ] ->
-        interpret_block_rec state block_label (Some label)
-        @@ List.assoc label cfg.named
-    | Br _ -> failwith "Br returned multiple states"
-  in
-  interpret_block_rec state None None cfg.entry
-
 and split_block_phi_instructions (block : Ir.block) =
   let is_phi = function _, Ir.Phi _ -> true | _ -> false in
   let unwrap_phi = function
@@ -448,7 +389,7 @@ and split_block_phi_instructions (block : Ir.block) =
     failwith "Phi instructions are not at the beginning of the block";
   (phi_instructions, non_phi_instructions)
 
-and phi_block_flow (source_block_name : Ir.label) (target_block : Ir.block)
+and flow_block_phi (source_block_name : Ir.label) (target_block : Ir.block)
     (states : StateSet.t) : StateSet.t =
   let phi_instructions, _ = split_block_phi_instructions target_block in
   StateSet.map
@@ -467,14 +408,14 @@ and phi_block_flow (source_block_name : Ir.label) (target_block : Ir.block)
         state phi_instructions)
     states
 
-and post_phi_block_flow (fixed_env : fixed_env) (block : Ir.block)
+and flow_block_post_phi (fixed_env : fixed_env) (block : Ir.block)
     (states : StateSet.t) : StateSet.t =
   let _, non_phi_instructions = split_block_phi_instructions block in
   let states =
     states |> StateSet.to_seq |> List.of_seq |> fun states ->
     List.fold_left
       (fun states (local_id, insn) ->
-        let results, _ = interpret_instruction fixed_env states None insn in
+        let results, _ = interpret_non_phi_instruction fixed_env states insn in
         List.map
           (fun (state, value) ->
             {
@@ -515,8 +456,8 @@ and flow_return (terminator : Ir.terminator) (states : StateSet.t) :
   | Ir.Ret None -> StateAndMaybeReturnSet.StateSet states
   | _ -> failwith "Unexpected flow"
 
-and interpret_cfg_flow (fixed_env : fixed_env) (states : StateSet.t)
-    (cfg : Ir.cfg) : StateAndMaybeReturnSet.t =
+and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
+    StateAndMaybeReturnSet.t =
   let lift_no_return (f : StateSet.t -> StateSet.t) = function
     | StateAndMaybeReturnSet.StateSet states ->
         StateAndMaybeReturnSet.StateSet (f states)
@@ -545,8 +486,8 @@ and interpret_cfg_flow (fixed_env : fixed_env) (states : StateSet.t)
         let analyze =
           Block_flow.make_flow_function
             (fun source_block_name target_block ->
-              lift_no_return @@ phi_block_flow source_block_name target_block)
-            (fun block -> lift_no_return @@ post_phi_block_flow fixed_env block)
+              lift_no_return @@ flow_block_phi source_block_name target_block)
+            (fun block -> lift_no_return @@ flow_block_post_phi fixed_env block)
             (fun terminator flow_target ->
               lift_no_return @@ flow_branch terminator flow_target)
             (fun terminator -> lift_return_out_only @@ flow_return terminator)
