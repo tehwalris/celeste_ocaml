@@ -262,7 +262,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
       handle_separately_no_phi (fun state ->
           let heap_id = heap_id_from_pointer_local state local_id in
           let state =
-            state_heap_update state (fun _ -> HObjectTable []) heap_id
+            state_heap_update state (fun _ -> HUnknownTable) heap_id
           in
           (state, VNil))
   | StoreClosure (target_local_id, fun_global_id, captured_local_ids) ->
@@ -328,7 +328,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                    or unknown table"
           in
           let state, field_heap_id =
-            match List.nth_opt old_fields index with
+            match List.nth_opt old_fields (index - 1) with
             | Some field_heap_id -> (state, field_heap_id)
             | None ->
                 if not create_if_missing then

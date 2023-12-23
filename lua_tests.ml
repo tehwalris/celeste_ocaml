@@ -64,6 +64,39 @@ let prepare_to_run_our_lua lua_code =
     let state = { state with Interpreter.prints = s :: state.prints } in
     (state, VNil)
   in
+  let builtin_add : Interpreter.builtin_fun =
+   fun state args ->
+    let table_heap_id, value_to_add =
+      match args with [ VPointer p; v ] -> (p, v) | _ -> failwith "Wrong args"
+    in
+    let heap_id_of_value_to_add = Interpreter.gen_heap_id () in
+    let state =
+      {
+        state with
+        heap =
+          Interpreter.HeapIdMap.add heap_id_of_value_to_add
+            (Interpreter.HValue value_to_add) state.heap;
+      }
+    in
+    let old_table = Interpreter.HeapIdMap.find table_heap_id state.heap in
+    let new_table =
+      match old_table with
+      | HArrayTable items ->
+          Interpreter.HArrayTable (items @ [ heap_id_of_value_to_add ])
+      | HUnknownTable -> Interpreter.HArrayTable [ heap_id_of_value_to_add ]
+      | Interpreter.HValue _ -> failwith "Wrong type HValue"
+      | Interpreter.HObjectTable _ -> failwith "Wrong type HObjectTable"
+      | Interpreter.HClosure (_, _) -> failwith "Wrong type HClosure"
+      | Interpreter.HBuiltinFun _ -> failwith "Wrong type HBuiltinFun"
+    in
+    let state =
+      {
+        state with
+        heap = Interpreter.HeapIdMap.add table_heap_id new_table state.heap;
+      }
+    in
+    (state, VNil)
+  in
   let builtin_new_unknown_boolean : Interpreter.builtin_fun =
    fun state args ->
     assert (args = []);
@@ -78,6 +111,7 @@ let prepare_to_run_our_lua lua_code =
     Interpreter.init fun_defs
       [
         ("print", builtin_print);
+        ("add", builtin_add);
         ("__new_unknown_boolean", builtin_new_unknown_boolean);
       ]
   in
@@ -142,9 +176,14 @@ let parse_expected_outputs text =
 let load_lua_file filename =
   BatFile.with_file_in (BatFilename.concat "lua_tests" filename) BatIO.read_all
 
-let test_against_real_lua filename =
+let test_against_real_lua filename include_pico8_specific =
   let lua_code = load_lua_file filename in
-  let expected_prints = run_real_lua lua_code in
+  let lua_code_for_real_lua =
+    if include_pico8_specific then
+      load_lua_file "_pico8_specific_for_real_lua.lua" ^ "\n" ^ lua_code
+    else lua_code
+  in
+  let expected_prints = run_real_lua lua_code_for_real_lua in
   let actual_prints = run_our_lua_for_prints_no_branching lua_code in
   assert_string_list_equal actual_prints expected_prints
 
@@ -163,14 +202,16 @@ let test_branch_count filename expected_branch_count =
     @@ Printf.sprintf "Got %d branches, expected %d" actual_branch_count
          expected_branch_count
 
-let%test_unit _ = test_against_real_lua "call_order.lua"
-let%test_unit _ = test_against_real_lua "every_kind_of_if_else.lua"
-let%test_unit _ = test_against_real_lua "hello_world.lua"
-let%test_unit _ = test_against_real_lua "if_scopes.lua"
-let%test_unit _ = test_against_real_lua "normal_operators.lua"
-let%test_unit _ = test_against_real_lua "properties.lua"
-let%test_unit _ = test_against_real_lua "scopes.lua"
-let%test_unit _ = test_against_real_lua "short_circuit_operators.lua"
+let%test_unit _ = test_against_real_lua "call_order.lua" false
+let%test_unit _ = test_against_real_lua "every_kind_of_if_else.lua" false
+let%test_unit _ = test_against_real_lua "hello_world.lua" false
+let%test_unit _ = test_against_real_lua "if_scopes.lua" false
+let%test_unit _ = test_against_real_lua "normal_operators.lua" false
+let%test_unit _ = test_against_real_lua "properties.lua" false
+let%test_unit _ = test_against_real_lua "scopes.lua" false
+let%test_unit _ = test_against_real_lua "short_circuit_operators.lua" false
+let%test_unit _ = test_against_real_lua "tables.lua" true
 let%test_unit _ = test_branch_prints "abstract_boolean_no_call.lua"
 let%test_unit _ = test_branch_prints "abstract_boolean.lua"
 let%test_unit _ = test_branch_count "branching_with_irrelevant_locals.lua" 1
+(* let%test_unit _ = test_branch_count "branching_with_allocations.lua" 1*)
