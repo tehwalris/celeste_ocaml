@@ -161,6 +161,7 @@ let%test_unit _ = test_against_real_lua "normal_operators.lua" false
 let%test_unit _ = test_against_real_lua "properties.lua" false
 let%test_unit _ = test_against_real_lua "scopes.lua" false
 let%test_unit _ = test_against_real_lua "short_circuit_operators.lua" false
+let%test_unit _ = test_against_real_lua "string_length.lua" false
 let%test_unit _ = test_against_real_lua "tables.lua" true
 let%test_unit _ = test_branch_prints "abstract_boolean_no_call.lua"
 let%test_unit _ = test_branch_prints "abstract_boolean.lua"

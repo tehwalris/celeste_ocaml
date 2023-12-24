@@ -192,6 +192,7 @@ let interpret_unary_op (op : string) (v : value) : value =
   | "-", VNumber v -> VNumber (Pico_number.neg v)
   | "not", VBool v -> VBool (not v)
   | "not", VUnknownBool -> VUnknownBool
+  | "#", VString v -> VNumber (Pico_number.of_int @@ String.length v)
   | op, v ->
       failwith @@ Printf.sprintf "Unsupported unary op: %s %s" op (show_value v)
 
