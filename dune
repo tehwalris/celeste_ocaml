@@ -16,7 +16,8 @@
  (libraries bigarray lua_parser.lib batteries tqdm ocamlgraph ocaml-lua re)
  (inline_tests
   (deps
-   (glob_files lua_tests/*.lua)))
+   (glob_files lua_tests/*.lua)
+   builtin_level_3.lua))
  (preprocess
   (pps ppx_deriving.show ppx_deriving.eq ppx_deriving.ord ppx_inline_test)))
 

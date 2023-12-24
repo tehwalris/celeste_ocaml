@@ -129,7 +129,8 @@ let test_against_real_lua filename include_level_3_for_real_lua =
   let lua_code = load_lua_file filename in
   let lua_code_for_real_lua =
     if include_level_3_for_real_lua then
-      load_lua_file "_level_3.lua" ^ "\n" ^ lua_code
+      BatFile.with_file_in "builtin_level_3.lua" BatIO.read_all
+      ^ "\n" ^ lua_code
     else lua_code
   in
   let expected_prints = run_real_lua lua_code_for_real_lua in
@@ -155,13 +156,13 @@ let%test_unit _ = test_against_real_lua "call_order.lua" false
 let%test_unit _ = test_against_real_lua "every_kind_of_if_else.lua" false
 let%test_unit _ = test_against_real_lua "for_range.lua" true
 let%test_unit _ = test_against_real_lua "hello_world.lua" false
-   let%test_unit _ = test_against_real_lua "if_scopes.lua" false
-   let%test_unit _ = test_against_real_lua "normal_operators.lua" false
-   let%test_unit _ = test_against_real_lua "properties.lua" false
-   let%test_unit _ = test_against_real_lua "scopes.lua" false
-   let%test_unit _ = test_against_real_lua "short_circuit_operators.lua" false
-   let%test_unit _ = test_against_real_lua "tables.lua" true
-   let%test_unit _ = test_branch_prints "abstract_boolean_no_call.lua"
-   let%test_unit _ = test_branch_prints "abstract_boolean.lua"
-   let%test_unit _ = test_branch_count "branching_with_irrelevant_locals.lua" 1
+let%test_unit _ = test_against_real_lua "if_scopes.lua" false
+let%test_unit _ = test_against_real_lua "normal_operators.lua" false
+let%test_unit _ = test_against_real_lua "properties.lua" false
+let%test_unit _ = test_against_real_lua "scopes.lua" false
+let%test_unit _ = test_against_real_lua "short_circuit_operators.lua" false
+let%test_unit _ = test_against_real_lua "tables.lua" true
+let%test_unit _ = test_branch_prints "abstract_boolean_no_call.lua"
+let%test_unit _ = test_branch_prints "abstract_boolean.lua"
+let%test_unit _ = test_branch_count "branching_with_irrelevant_locals.lua" 1
 let%test_unit _ = test_branch_count "branching_with_allocations.lua" 1

@@ -1,7 +1,23 @@
 open Compiler_lib
 
+let suffix_code = String.trim {|
+_init()
+|}
+
 let () =
-  let ast = Frontend.load_program "celeste-standard-syntax.lua" in
+  let lua_code =
+    BatFile.with_file_in "celeste-standard-syntax.lua" BatIO.read_all
+  in
+  let ast =
+    Lua_parser.Parse.parse_from_string
+    @@ String.concat "\n"
+         [
+           BatFile.with_file_in "builtin_level_3.lua" BatIO.read_all;
+           lua_code;
+           suffix_code;
+           "\n";
+         ]
+  in
   let stream = Frontend.compile_top_level_ast ast in
   let cfg, fun_defs = Frontend.cfg_of_stream stream in
   let fixed_env, initial_state =
