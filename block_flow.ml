@@ -4,6 +4,7 @@ type flow_node =
   | BeforeNamedBlock of Ir.label
   | AfterNamedBlock of Ir.label
   | Return
+[@@deriving show]
 
 module G = Graph.Imperative.Digraph.Concrete (struct
   type t = flow_node

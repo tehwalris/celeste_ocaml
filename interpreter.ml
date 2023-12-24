@@ -96,6 +96,13 @@ module StateAndMaybeReturnSet = struct
         StateAndReturnSet (StateAndReturnSet.union a b)
     | _ -> failwith "Cannot union StateSet and StateAndReturnSet"
 
+  let diff (a : t) (b : t) : t =
+    match (a, b) with
+    | StateSet a, StateSet b -> StateSet (StateSet.diff a b)
+    | StateAndReturnSet a, StateAndReturnSet b ->
+        StateAndReturnSet (StateAndReturnSet.diff a b)
+    | _ -> failwith "Cannot diff StateSet and StateAndReturnSet"
+
   let equal (a : t) (b : t) : bool =
     match (a, b) with
     | StateSet a, StateSet b -> StateSet.equal a b
@@ -635,7 +642,7 @@ and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
   in
   let live_variable_analysis = analyze_live_variables cfg in
   let module CfgFixpoint =
-    Graph.Fixpoint.Make
+    Custom_fixpoint.Make
       (Block_flow.G)
       (struct
         type vertex = Block_flow.G.E.vertex
@@ -643,9 +650,32 @@ and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
         type g = Block_flow.G.t
         type data = StateAndMaybeReturnSet.t option
 
-        let direction = Graph.Fixpoint.Forward
-        let equal = Flow.lift_equal StateAndMaybeReturnSet.equal
+        let empty = None
         let join = Flow.lift_join StateAndMaybeReturnSet.union
+
+        let accumulate (accumulated : StateAndMaybeReturnSet.t option)
+            (potentially_new : StateAndMaybeReturnSet.t option) :
+            StateAndMaybeReturnSet.t option
+            * StateAndMaybeReturnSet.t option option =
+          let is_empty = function
+            | Some (StateAndMaybeReturnSet.StateSet states) ->
+                StateSet.is_empty states
+            | Some (StateAndMaybeReturnSet.StateAndReturnSet states) ->
+                StateAndReturnSet.is_empty states
+            | None -> true
+          in
+          if is_empty potentially_new then (accumulated, None)
+          else if is_empty accumulated then
+            (potentially_new, Some potentially_new)
+          else
+            let actually_new =
+              Some
+                (StateAndMaybeReturnSet.diff
+                   (Option.get potentially_new)
+                   (Option.get accumulated))
+            in
+            ( join accumulated actually_new,
+              if is_empty actually_new then None else Some actually_new )
 
         let analyze =
           Block_flow.make_flow_function
@@ -659,6 +689,16 @@ and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
               lift_no_return @@ flow_branch terminator flow_target)
             (fun terminator -> lift_return_out_only @@ flow_return terminator)
             cfg
+
+        let show_data = function
+          | Some (StateAndMaybeReturnSet.StateSet states) ->
+              Printf.sprintf "Some(StateSet %d)" (StateSet.cardinal states)
+          | Some (StateAndMaybeReturnSet.StateAndReturnSet states) ->
+              Printf.sprintf "Some(StateAndReturnSet %d)"
+                (StateAndReturnSet.cardinal states)
+          | None -> "None"
+
+        let show_vertex = Block_flow.show_flow_node
       end)
   in
   let g = Block_flow.flow_graph_of_cfg cfg in

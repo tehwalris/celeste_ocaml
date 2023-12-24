@@ -1,6 +1,6 @@
 if __new_unknown_boolean() then
-  print("a")
+  -- print("a")
 else
-  local s = "a"
-  print(s)
+  -- local s = "a"
+  -- print(s)
 end
