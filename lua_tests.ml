@@ -57,12 +57,7 @@ let prepare_to_run_our_lua lua_code =
   let cfg, fun_defs = Frontend.cfg_of_stream stream in
   let fixed_env, state =
     Interpreter.init fun_defs
-    @@ List.concat
-         [
-           Builtin.level_1_builtins;
-           Builtin.level_2_builtins;
-           Builtin.level_3_builtins;
-         ]
+    @@ List.concat [ Builtin.level_1_builtins; Builtin.level_2_builtins ]
   in
   (cfg, fixed_env, state)
 
@@ -125,15 +120,14 @@ let parse_expected_outputs text =
 let load_lua_file filename =
   BatFile.with_file_in (BatFilename.concat "lua_tests" filename) BatIO.read_all
 
-let test_against_real_lua filename include_level_3_for_real_lua =
-  let lua_code = load_lua_file filename in
-  let lua_code_for_real_lua =
-    if include_level_3_for_real_lua then
+let test_against_real_lua filename include_level_3 =
+  let lua_code =
+    if include_level_3 then
       BatFile.with_file_in "builtin_level_3.lua" BatIO.read_all
-      ^ "\n" ^ lua_code
-    else lua_code
+      ^ "\n" ^ load_lua_file filename
+    else load_lua_file filename
   in
-  let expected_prints = run_real_lua lua_code_for_real_lua in
+  let expected_prints = run_real_lua lua_code in
   let actual_prints = run_our_lua_for_prints_no_branching lua_code in
   assert_string_list_equal actual_prints expected_prints
 

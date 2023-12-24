@@ -187,12 +187,19 @@ type terminator_result =
   (* each item might _not_ correspond to an input state *)
   | Br of (Ir.label * state) list
 
-let interpret_unary_op (op : string) (v : value) : value =
+let interpret_unary_op (state: state) (op : string) (v : value) : value =
   match (op, v) with
   | "-", VNumber v -> VNumber (Pico_number.neg v)
   | "not", VBool v -> VBool (not v)
   | "not", VUnknownBool -> VUnknownBool
   | "#", VString v -> VNumber (Pico_number.of_int @@ String.length v)
+  | "#", VPointer heap_id ->
+    let table = HeapIdMap.find heap_id state.heap in
+    (match table with
+    | HArrayTable items -> VNumber (Pico_number.of_int @@ List.length items)
+    | HUnknownTable -> VNumber (Pico_number.of_int 0)
+    | _ -> failwith @@ Printf.sprintf "Expected HArrayTable or HUnknownTable"
+    )
   | op, v ->
       failwith @@ Printf.sprintf "Unsupported unary op: %s %s" op (show_value v)
 
@@ -438,7 +445,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
   | UnaryOp (op, local_id) ->
       handle_separately_no_phi (fun state ->
           let value = Ir.LocalIdMap.find local_id state.local_env in
-          (state, interpret_unary_op op value))
+          (state, interpret_unary_op state op value))
   | BinaryOp (left_local_id, op, right_local_id) ->
       handle_separately_no_phi (fun state ->
           let left_value = Ir.LocalIdMap.find left_local_id state.local_env in
