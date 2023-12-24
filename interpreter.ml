@@ -386,6 +386,13 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                     (fun def -> def.Ir.name = fun_global_id)
                     fixed_env.fun_defs
                 in
+                assert (List.length arg_values <= List.length fun_def.Ir.arg_ids);
+                let padded_arg_values =
+                  arg_values
+                  @ List.init
+                      (List.length fun_def.Ir.arg_ids - List.length arg_values)
+                      (fun _ -> VNil)
+                in
                 let inner_state : state =
                   {
                     state with
@@ -395,7 +402,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                           Ir.LocalIdMap.add id value locals)
                         Ir.LocalIdMap.empty
                         (fun_def.Ir.capture_ids @ fun_def.Ir.arg_ids)
-                        (captured_values @ arg_values);
+                        (captured_values @ padded_arg_values);
                   }
                 in
                 interpret_cfg fixed_env

@@ -153,6 +153,7 @@ let test_branch_count filename expected_branch_count =
          expected_branch_count
 
 let%test_unit _ = test_against_real_lua "call_order.lua" false
+let%test_unit _ = test_against_real_lua "call_with_less_args.lua" false
 let%test_unit _ = test_against_real_lua "every_kind_of_if_else.lua" false
 let%test_unit _ = test_against_real_lua "for_range.lua" true
 let%test_unit _ = test_against_real_lua "hello_world.lua" false
