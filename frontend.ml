@@ -37,6 +37,10 @@ let cfg_of_stream (code : stream) : Ir.cfg * Ir.fun_def list =
               :: named_blocks,
               fun_defs )
         | I (id, instruction) ->
+            if Option.is_none unused_terminator then
+              Printf.printf "%s\n%s"
+                (Ir.show_instruction @@ instruction)
+                (show_stream code);
             assert (Option.is_some unused_terminator);
             ( (id, instruction) :: unused_instructions,
               unused_terminator,
@@ -392,6 +396,7 @@ and compile_statement (c : Ctxt.t) (break_label : Ir.label option) (stmt : ast)
       ( c,
         start_code >@ end_code
         >:: I (step_id, Ir.NumberConstant (Pico_number.of_int 1))
+        >:: T (gen_local_id (), Ir.Br init_end_label)
         >:: L init_end_label
         >:: T (gen_local_id (), Ir.Br head_label)
         >:: L head_label
@@ -412,6 +417,7 @@ and compile_statement (c : Ctxt.t) (break_label : Ir.label option) (stmt : ast)
                 (Ctxt.add c var_name var_id)
                 (Some join_label) statements
         >:: I (next_val_id, Ir.BinaryOp (val_id, "+", step_id))
+        >:: T (gen_local_id (), Ir.Br body_end_label)
         >:: L body_end_label
         >:: T (gen_local_id (), Ir.Br head_label)
         >:: L join_label )
