@@ -12,6 +12,7 @@ let () =
     Lua_parser.Parse.parse_from_string
     @@ String.concat "\n"
          [
+           BatFile.with_file_in "builtin_level_3.lua" BatIO.read_all;
            BatFile.with_file_in "builtin_level_4.lua" BatIO.read_all;
            lua_code;
            suffix_code;
@@ -22,12 +23,7 @@ let () =
   let cfg, fun_defs = Frontend.cfg_of_stream stream in
   let fixed_env, initial_state =
     Interpreter.init fun_defs
-    @@ List.concat
-         [
-           Builtin.level_1_builtins;
-           Builtin.level_2_builtins;
-           Builtin.level_3_builtins;
-         ]
+    @@ List.concat [ Builtin.level_1_builtins; Builtin.level_2_builtins ]
   in
   let states_and_maybe_returns =
     Interpreter.interpret_cfg fixed_env

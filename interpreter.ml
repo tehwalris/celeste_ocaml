@@ -43,6 +43,7 @@ let show_string_id_map show_v s =
 type state = {
   heap : heap_value HeapIdMap.t;
   local_env : value Ir.LocalIdMap.t;
+  outer_local_envs : value Ir.LocalIdMap.t list;
   global_env : heap_id StringMap.t;
   prints : string list;
 }
@@ -165,6 +166,10 @@ let gc_heap (state : state) : state =
       state with
       global_env = StringMap.map visit state.global_env;
       local_env = Ir.LocalIdMap.map (map_value_references visit) state.local_env;
+      outer_local_envs =
+        List.map
+          (Ir.LocalIdMap.map @@ map_value_references visit)
+          state.outer_local_envs;
     }
   in
   { state with heap = !new_heap }
@@ -187,19 +192,18 @@ type terminator_result =
   (* each item might _not_ correspond to an input state *)
   | Br of (Ir.label * state) list
 
-let interpret_unary_op (state: state) (op : string) (v : value) : value =
+let interpret_unary_op (state : state) (op : string) (v : value) : value =
   match (op, v) with
   | "-", VNumber v -> VNumber (Pico_number.neg v)
   | "not", VBool v -> VBool (not v)
   | "not", VUnknownBool -> VUnknownBool
   | "#", VString v -> VNumber (Pico_number.of_int @@ String.length v)
-  | "#", VPointer heap_id ->
-    let table = HeapIdMap.find heap_id state.heap in
-    (match table with
-    | HArrayTable items -> VNumber (Pico_number.of_int @@ List.length items)
-    | HUnknownTable -> VNumber (Pico_number.of_int 0)
-    | _ -> failwith @@ Printf.sprintf "Expected HArrayTable or HUnknownTable"
-    )
+  | "#", VPointer heap_id -> (
+      let table = HeapIdMap.find heap_id state.heap in
+      match table with
+      | HArrayTable items -> VNumber (Pico_number.of_int @@ List.length items)
+      | HUnknownTable -> VNumber (Pico_number.of_int 0)
+      | _ -> failwith @@ Printf.sprintf "Expected HArrayTable or HUnknownTable")
   | op, v ->
       failwith @@ Printf.sprintf "Unsupported unary op: %s %s" op (show_value v)
 
@@ -216,6 +220,12 @@ let interpret_binary_op (l : value) (op : string) (r : value) : value =
   | VNumber l, ">=", VNumber r -> VBool (Int32.compare l r >= 0)
   | VNumber l, "==", VNumber r -> VBool (Int32.compare l r = 0)
   | VNumber l, "~=", VNumber r -> VBool (Int32.compare l r <> 0)
+  | VNil, "==", VNil -> VBool true
+  | _, "==", VNil -> VBool false
+  | VNil, "==", _ -> VBool false
+  | VNil, "~=", VNil -> VBool false
+  | _, "~=", VNil -> VBool true
+  | VNil, "~=", _ -> VBool true
   | VString l, "..", VString r -> VString (l ^ r)
   | VString l, "..", VNumber r ->
       VString (l ^ Int.to_string @@ Pico_number.int_of r)
@@ -415,6 +425,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                         Ir.LocalIdMap.empty
                         (fun_def.Ir.capture_ids @ fun_def.Ir.arg_ids)
                         (captured_values @ padded_arg_values);
+                    outer_local_envs = state.local_env :: state.outer_local_envs;
                   }
                 in
                 interpret_cfg fixed_env
@@ -431,7 +442,9 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                        let state =
                          {
                            heap = inner_state.heap;
-                           local_env = state.local_env;
+                           local_env = List.hd inner_state.outer_local_envs;
+                           outer_local_envs =
+                             List.tl inner_state.outer_local_envs;
                            global_env = inner_state.global_env;
                            prints = inner_state.prints;
                          }
@@ -645,6 +658,7 @@ let init (fun_defs : Ir.fun_def list) (builtins : (string * builtin_fun) list) :
     {
       heap = HeapIdMap.empty;
       local_env = Ir.LocalIdMap.empty;
+      outer_local_envs = [];
       global_env = StringMap.empty;
       prints = [];
     }

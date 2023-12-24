@@ -127,8 +127,8 @@ let test_against_real_lua filename include_level_3 =
       ^ "\n" ^ load_lua_file filename
     else load_lua_file filename
   in
-  let expected_prints = run_real_lua lua_code in
   let actual_prints = run_our_lua_for_prints_no_branching lua_code in
+  let expected_prints = run_real_lua lua_code in
   assert_string_list_equal actual_prints expected_prints
 
 let test_branch_prints filename =
@@ -155,6 +155,10 @@ let%test_unit _ = test_against_real_lua "every_kind_of_if_else.lua" false
 let%test_unit _ = test_against_real_lua "for_range.lua" true
 let%test_unit _ = test_against_real_lua "hello_world.lua" false
 let%test_unit _ = test_against_real_lua "if_scopes.lua" false
+
+let%test_unit _ =
+  test_against_real_lua "liveness_issue_for_in_function.lua" true
+
 let%test_unit _ = test_against_real_lua "normal_operators.lua" false
 let%test_unit _ = test_against_real_lua "properties.lua" false
 let%test_unit _ = test_against_real_lua "scopes.lua" false
