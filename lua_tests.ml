@@ -51,69 +51,18 @@ let run_real_lua lua_code =
   List.rev !collected_prints
 
 let prepare_to_run_our_lua lua_code =
-  let builtin_print : Interpreter.builtin_fun =
-   fun state args ->
-    let s =
-      match args with
-      | [ Interpreter.VNumber n ] -> Int.to_string @@ Pico_number.int_of n
-      | [ Interpreter.VBool b ] -> if b then "true" else "false"
-      | [ Interpreter.VString s ] -> s
-      | [ Interpreter.VNil ] -> "nil"
-      | _ -> failwith "Wrong args"
-    in
-    let state = { state with Interpreter.prints = s :: state.prints } in
-    (state, VNil)
-  in
-  let builtin_add : Interpreter.builtin_fun =
-   fun state args ->
-    let table_heap_id, value_to_add =
-      match args with [ VPointer p; v ] -> (p, v) | _ -> failwith "Wrong args"
-    in
-    let heap_id_of_value_to_add = Interpreter.gen_heap_id () in
-    let state =
-      {
-        state with
-        heap =
-          Interpreter.HeapIdMap.add heap_id_of_value_to_add
-            (Interpreter.HValue value_to_add) state.heap;
-      }
-    in
-    let old_table = Interpreter.HeapIdMap.find table_heap_id state.heap in
-    let new_table =
-      match old_table with
-      | HArrayTable items ->
-          Interpreter.HArrayTable (items @ [ heap_id_of_value_to_add ])
-      | HUnknownTable -> Interpreter.HArrayTable [ heap_id_of_value_to_add ]
-      | Interpreter.HValue _ -> failwith "Wrong type HValue"
-      | Interpreter.HObjectTable _ -> failwith "Wrong type HObjectTable"
-      | Interpreter.HClosure (_, _) -> failwith "Wrong type HClosure"
-      | Interpreter.HBuiltinFun _ -> failwith "Wrong type HBuiltinFun"
-    in
-    let state =
-      {
-        state with
-        heap = Interpreter.HeapIdMap.add table_heap_id new_table state.heap;
-      }
-    in
-    (state, VNil)
-  in
-  let builtin_new_unknown_boolean : Interpreter.builtin_fun =
-   fun state args ->
-    assert (args = []);
-    (state, VUnknownBool)
-  in
-
   (* HACK the parser does not like comments at the end of the file without a trailing newline *)
   let ast = Lua_parser.Parse.parse_from_string (lua_code ^ "\n") in
   let stream = Frontend.compile_top_level_ast ast in
   let cfg, fun_defs = Frontend.cfg_of_stream stream in
   let fixed_env, state =
     Interpreter.init fun_defs
-      [
-        ("print", builtin_print);
-        ("add", builtin_add);
-        ("__new_unknown_boolean", builtin_new_unknown_boolean);
-      ]
+    @@ List.concat
+         [
+           Builtin.level_1_builtins;
+           Builtin.level_2_builtins;
+           Builtin.level_3_builtins;
+         ]
   in
   (cfg, fixed_env, state)
 
@@ -176,11 +125,11 @@ let parse_expected_outputs text =
 let load_lua_file filename =
   BatFile.with_file_in (BatFilename.concat "lua_tests" filename) BatIO.read_all
 
-let test_against_real_lua filename include_pico8_specific =
+let test_against_real_lua filename include_level_3_for_real_lua =
   let lua_code = load_lua_file filename in
   let lua_code_for_real_lua =
-    if include_pico8_specific then
-      load_lua_file "_pico8_specific_for_real_lua.lua" ^ "\n" ^ lua_code
+    if include_level_3_for_real_lua then
+      load_lua_file "_level_3.lua" ^ "\n" ^ lua_code
     else lua_code
   in
   let expected_prints = run_real_lua lua_code_for_real_lua in

@@ -3,6 +3,7 @@
  (modules
   aliasing
   block_flow
+  builtin
   bypass_redundant_loads
   flow
   frontend
