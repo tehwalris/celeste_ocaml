@@ -594,14 +594,29 @@ and flow_branch (terminator : Ir.terminator) (flow_target : Ir.label)
 
 and flow_return (terminator : Ir.terminator) (states : StateSet.t) :
     StateAndMaybeReturnSet.t =
+  let clean_state_after_return preserved_local_id state =
+    {
+      state with
+      local_env =
+        (match preserved_local_id with
+        | Some local_id ->
+            Ir.LocalIdMap.singleton local_id
+            @@ Ir.LocalIdMap.find local_id state.local_env
+        | None -> Ir.LocalIdMap.empty);
+    }
+    |> gc_heap |> normalize_state
+  in
   match terminator with
   | Ir.Ret (Some local_id) ->
       StateAndMaybeReturnSet.StateAndReturnSet
         (states |> StateSet.to_seq
         |> Seq.map (fun state ->
+               let state = clean_state_after_return (Some local_id) state in
                (state, Ir.LocalIdMap.find local_id state.local_env))
         |> StateAndReturnSet.of_seq)
-  | Ir.Ret None -> StateAndMaybeReturnSet.StateSet states
+  | Ir.Ret None ->
+      StateAndMaybeReturnSet.StateSet
+        (StateSet.map (clean_state_after_return None) states)
   | _ -> failwith "Unexpected flow"
 
 and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
