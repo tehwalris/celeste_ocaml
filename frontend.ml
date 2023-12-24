@@ -101,15 +101,19 @@ let gen_id_and_stream (insn : Ir.instruction) : Ir.local_id * stream =
 let add_terminator_if_needed (t : Ir.terminator) (code : stream) : stream =
   match code with T _ :: _ -> code | _ -> code >:: T (gen_local_id (), t)
 
-let simple_single_quote_lua_string_regex = Str.regexp {|^'\([^\\\n']*\)'$|}
-let simple_double_quote_lua_string_regex = Str.regexp {|^"\([^\\\n"]*\)"$|}
+let simple_single_quote_lua_string_regex =
+  Re.Perl.compile_pat {|^'([^\\\n']*)'$|}
+
+let simple_double_quote_lua_string_regex =
+  Re.Perl.compile_pat {|^"([^\\\n"]*)"$|}
 
 let parse_lua_string (s : string) : string =
-  if Str.string_match simple_single_quote_lua_string_regex s 0 then
-    Str.matched_group 1 s
-  else if Str.string_match simple_double_quote_lua_string_regex s 0 then
-    Str.matched_group 1 s
-  else unsupported_ast (String s)
+  let single_quote_match = Re.exec_opt simple_single_quote_lua_string_regex s in
+  let double_quote_match = Re.exec_opt simple_double_quote_lua_string_regex s in
+  match (single_quote_match, double_quote_match) with
+  | Some m, None -> Re.Group.get m 1
+  | None, Some m -> Re.Group.get m 1
+  | _ -> unsupported_ast (String s)
 
 let rec compile_lhs_expression (c : Ctxt.t) (expr : ast)
     (create_if_missing : bool) : Ir.local_id * stream =
