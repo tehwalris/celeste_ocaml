@@ -386,12 +386,17 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                     (fun def -> def.Ir.name = fun_global_id)
                     fixed_env.fun_defs
                 in
-                assert (List.length arg_values <= List.length fun_def.Ir.arg_ids);
                 let padded_arg_values =
-                  arg_values
-                  @ List.init
-                      (List.length fun_def.Ir.arg_ids - List.length arg_values)
-                      (fun _ -> VNil)
+                  if List.length arg_values < List.length fun_def.Ir.arg_ids
+                  then
+                    arg_values
+                    @ List.init
+                        (List.length fun_def.Ir.arg_ids - List.length arg_values)
+                        (fun _ -> VNil)
+                  else if
+                    List.length arg_values > List.length fun_def.Ir.arg_ids
+                  then BatList.take (List.length fun_def.Ir.arg_ids) arg_values
+                  else arg_values
                 in
                 let inner_state : state =
                   {
