@@ -12,7 +12,7 @@ let () =
     Lua_parser.Parse.parse_from_string
     @@ String.concat "\n"
          [
-           BatFile.with_file_in "builtin_level_3.lua" BatIO.read_all;
+           BatFile.with_file_in "builtin_level_4.lua" BatIO.read_all;
            lua_code;
            suffix_code;
            "\n";
