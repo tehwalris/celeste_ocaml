@@ -151,10 +151,10 @@ let test_branch_count filename expected_branch_count =
     @@ Printf.sprintf "Got %d branches, expected %d" actual_branch_count
          expected_branch_count
 
-(* let%test_unit _ = test_against_real_lua "call_order.lua" false
-   let%test_unit _ = test_against_real_lua "every_kind_of_if_else.lua" false *)
+let%test_unit _ = test_against_real_lua "call_order.lua" false
+let%test_unit _ = test_against_real_lua "every_kind_of_if_else.lua" false
 let%test_unit _ = test_against_real_lua "for_range.lua" true
-(* let%test_unit _ = test_against_real_lua "hello_world.lua" false
+let%test_unit _ = test_against_real_lua "hello_world.lua" false
    let%test_unit _ = test_against_real_lua "if_scopes.lua" false
    let%test_unit _ = test_against_real_lua "normal_operators.lua" false
    let%test_unit _ = test_against_real_lua "properties.lua" false
@@ -164,4 +164,4 @@ let%test_unit _ = test_against_real_lua "for_range.lua" true
    let%test_unit _ = test_branch_prints "abstract_boolean_no_call.lua"
    let%test_unit _ = test_branch_prints "abstract_boolean.lua"
    let%test_unit _ = test_branch_count "branching_with_irrelevant_locals.lua" 1
-   let%test_unit _ = test_branch_count "branching_with_allocations.lua" 1 *)
+let%test_unit _ = test_branch_count "branching_with_allocations.lua" 1
