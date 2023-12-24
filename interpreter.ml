@@ -707,7 +707,7 @@ and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
       Some (StateAndMaybeReturnSet.StateSet states)
     else None
   in
-  Option.get @@ CfgFixpoint.analyze init g Block_flow.Return
+  Option.get @@ CfgFixpoint.analyze false init g Block_flow.Return
 
 let init (fun_defs : Ir.fun_def list) (builtins : (string * builtin_fun) list) :
     fixed_env * state =

@@ -74,14 +74,17 @@ struct
   module M = Map.Make (G.V)
   module N = Set.Make (G.V)
 
-  let analyze initial g =
+  let analyze debug initial g =
     let nodes, m_data_acc, m_data_new =
       G.fold_vertex
         (fun vertex (n, m_data_acc, m_data_new) ->
           ( (if initial vertex = A.empty then n else N.add vertex n),
-            (* TODO is the above "if" check necessary? *)
             M.add vertex A.empty m_data_acc,
-            M.add vertex (initial vertex) m_data_new ))
+            M.add vertex
+              (G.succ_e g vertex |> List.to_seq
+              |> Seq.map (fun edge -> (G.E.dst edge, initial vertex))
+              |> M.of_seq)
+              m_data_new ))
         g
         (N.empty, M.empty, M.empty)
     in
@@ -97,7 +100,7 @@ struct
       G.fold_vertex (fun vertex m -> M.add vertex (add vertex) m) g M.empty
     in
 
-    let rec worklist (m_data_acc : A.data M.t) (m_data_new : A.data M.t)
+    let rec worklist (m_data_acc : A.data M.t) (m_data_new : A.data M.t M.t)
         (wl : N.t) =
       (* 'meet' an arbitrary number of data-sets *)
       let meet initial xs = List.fold_left A.join initial xs in
@@ -106,8 +109,8 @@ struct
          as necessary *)
       let analyze_node analysis n m_data_acc m_data_new wl =
         match analysis m_data_acc m_data_new n with
-        | m_data_acc, None -> (m_data_acc, M.add n A.empty m_data_new, wl)
-        | m_data_acc, Some m_data_new -> (m_data_acc, m_data_new, N.add n wl)
+        | m_data_acc, m_data_new, false -> (m_data_acc, m_data_new, wl)
+        | m_data_acc, m_data_new, true -> (m_data_acc, m_data_new, N.add n wl)
       in
 
       (* get some node from the node-set -- this will eventually trigger
@@ -126,31 +129,48 @@ struct
                if the result is different to the previously stored data
                for this node, return a new tuple, else None *)
             let new_node_data (m_data_acc : A.data M.t)
-                (m_data_new : A.data M.t) node =
+                (m_data_new : A.data M.t M.t) node =
               let edges = M.find node nodemap in
               let analysis =
-                List.map (fun (f, src) -> f (M.find src m_data_new)) edges
+                List.map
+                  (fun (f, src) -> M.find src m_data_new |> M.find node |> f)
+                  edges
+              in
+              let m_data_new =
+                List.fold_left
+                  (fun m_data_new (_, src) ->
+                    M.add src
+                      (M.add node A.empty @@ M.find src m_data_new)
+                      m_data_new)
+                  m_data_new edges
               in
               let data_acc = M.find node m_data_acc in
               let potentially_new = meet (initial node) analysis in
               let data_acc', actually_new =
                 A.accumulate data_acc potentially_new
               in
-              (*
-              Printf.printf
-                "Analyzing node %s; data_acc = %s; potentially_new = %s; \
-                 data_acc' = %s; actually_new = %s\n"
-                (A.show_vertex node) (A.show_data data_acc)
-                (A.show_data potentially_new)
-                (A.show_data data_acc')
-                (match actually_new with
-                | Some d -> Printf.sprintf "Some(%s)" @@ A.show_data d
-                | None -> "None");
-                *)
-              ( M.add node data_acc' m_data_acc,
+              if debug then
+                Printf.printf
+                  "Analyzing node %s; data_acc = %s; potentially_new = %s; \
+                   data_acc' = %s; actually_new = %s\n"
+                  (A.show_vertex node) (A.show_data data_acc)
+                  (A.show_data potentially_new)
+                  (A.show_data data_acc')
+                  (match actually_new with
+                  | Some d -> Printf.sprintf "Some(%s)" @@ A.show_data d
+                  | None -> "None");
+              let m_data_acc = M.add node data_acc' m_data_acc in
+              let m_data_new : A.data M.t M.t =
                 match actually_new with
-                | Some d -> Some (M.add node d m_data_new)
-                | None -> None )
+                | Some d ->
+                    M.add node
+                      (M.map
+                         (fun old_d -> A.join d old_d)
+                         (M.find node m_data_new))
+                      m_data_new
+                | None -> m_data_new
+              in
+              (m_data_acc, m_data_new, Option.is_some actually_new)
             in
 
             (new_node_data, G.succ g n)
