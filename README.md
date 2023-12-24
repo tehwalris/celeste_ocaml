@@ -19,3 +19,4 @@ Dune generates the `celeste_ocaml.opam` file. More info on that [here](https://l
 - Level 3 (lua): Native Lua functions that only exist on Pico-8, but are required by tests (e.g. `add`). These are used by our interpreter and by real Lua.
 - Level 4 (builtin): Pico8 functions that are not required by tests (e.g. `sfx`). Some of these (typically drawing functions) may be empty stubs.
 - Level 4 (lua): Same as above, but implemented as Lua functions. These are used by our interpreter, not by real Lua.
+- Level 5 (builtin): Pico8 functions that depend on cart data.

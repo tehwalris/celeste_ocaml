@@ -23,7 +23,12 @@ let () =
   let cfg, fun_defs = Frontend.cfg_of_stream stream in
   let fixed_env, initial_state =
     Interpreter.init fun_defs
-    @@ List.concat [ Builtin.level_1_builtins; Builtin.level_2_builtins ]
+    @@ List.concat
+         [
+           Builtin.level_1_builtins;
+           Builtin.level_2_builtins;
+           Builtin.load_level_5_builtins ();
+         ]
   in
   let states_and_maybe_returns =
     Interpreter.interpret_cfg fixed_env
