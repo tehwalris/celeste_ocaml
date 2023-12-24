@@ -214,4 +214,4 @@ let%test_unit _ = test_against_real_lua "tables.lua" true
 let%test_unit _ = test_branch_prints "abstract_boolean_no_call.lua"
 let%test_unit _ = test_branch_prints "abstract_boolean.lua"
 let%test_unit _ = test_branch_count "branching_with_irrelevant_locals.lua" 1
-(* let%test_unit _ = test_branch_count "branching_with_allocations.lua" 1*)
+let%test_unit _ = test_branch_count "branching_with_allocations.lua" 1
