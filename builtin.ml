@@ -25,4 +25,13 @@ let builtin_print : builtin_fun =
   let state = { state with prints = s :: state.prints } in
   (state, VNil)
 
-let level_2_builtins = [ ("print", builtin_print) ]
+let builtin_error : builtin_fun =
+ (* Unlike real Lua this doesn't actually throw Lua-level exceptions, but it still
+    crashes the program, which is all we care about. *)
+ fun _state args ->
+  match args with
+  | [] -> failwith "error called"
+  | [ VString s ] -> failwith @@ Printf.sprintf "error called: %s" s
+  | _ -> failwith "Wrong args"
+
+let level_2_builtins = [ ("print", builtin_print); ("error", builtin_error) ]

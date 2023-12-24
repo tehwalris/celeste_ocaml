@@ -208,7 +208,18 @@ let interpret_unary_op (state : state) (op : string) (v : value) : value =
       failwith @@ Printf.sprintf "Unsupported unary op: %s %s" op (show_value v)
 
 let interpret_binary_op (l : value) (op : string) (r : value) : value =
+  let is_simple_value v =
+    match v with
+    | VNumber _ -> true
+    | VBool _ -> true
+    | VUnknownBool -> false
+    | VString _ -> true
+    | VNil -> true
+    | VPointer _ -> false
+  in
   match (l, op, r) with
+  | a, "==", b when is_simple_value a && is_simple_value b -> VBool (a = b)
+  | a, "~=", b when is_simple_value a && is_simple_value b -> VBool (a <> b)
   | VNumber l, "+", VNumber r -> VNumber (Pico_number.add l r)
   | VNumber l, "-", VNumber r -> VNumber (Pico_number.sub l r)
   | VNumber l, "*", VNumber r -> VNumber (Pico_number.mul l r)
@@ -218,20 +229,11 @@ let interpret_binary_op (l : value) (op : string) (r : value) : value =
   | VNumber l, "<=", VNumber r -> VBool (Int32.compare l r <= 0)
   | VNumber l, ">", VNumber r -> VBool (Int32.compare l r > 0)
   | VNumber l, ">=", VNumber r -> VBool (Int32.compare l r >= 0)
-  | VNumber l, "==", VNumber r -> VBool (Int32.compare l r = 0)
-  | VNumber l, "~=", VNumber r -> VBool (Int32.compare l r <> 0)
-  | VNil, "==", VNil -> VBool true
-  | _, "==", VNil -> VBool false
-  | VNil, "==", _ -> VBool false
-  | VNil, "~=", VNil -> VBool false
-  | _, "~=", VNil -> VBool true
-  | VNil, "~=", _ -> VBool true
   | VString l, "..", VString r -> VString (l ^ r)
   | VString l, "..", VNumber r ->
       VString (l ^ Int.to_string @@ Pico_number.int_of r)
   | VNumber l, "..", VString r ->
       VString ((Int.to_string @@ Pico_number.int_of l) ^ r)
-  | VString l, "==", VString r -> VBool (String.equal l r)
   | l, op, r ->
       failwith
       @@ Printf.sprintf "Unsupported binary op: %s %s %s" (show_value l) op
