@@ -35,6 +35,11 @@ module StringMap = Map.Make (struct
   let compare = Stdlib.compare
 end)
 
+let show_string_id_map show_v s =
+  s |> StringMap.bindings
+  |> List.map (fun (k, v) -> Printf.sprintf "\"%s\" -> %s" k (show_v v))
+  |> String.concat "; "
+
 type state = {
   heap : heap_value HeapIdMap.t;
   local_env : value Ir.LocalIdMap.t;
@@ -163,6 +168,18 @@ let gc_heap (state : state) : state =
     }
   in
   { state with heap = !new_heap }
+
+let normalize_state state =
+  (* The = operator for maps considers the internal tree structure, not just the
+     contained values like Map.equal. This normalize function makes = work
+     correctly for our state by rebuilding all maps so that their internal tree
+     structure is identical if their values are identical. *)
+  {
+    state with
+    global_env = state.global_env |> StringMap.to_seq |> StringMap.of_seq;
+    local_env = state.local_env |> Ir.LocalIdMap.to_seq |> Ir.LocalIdMap.of_seq;
+    heap = state.heap |> HeapIdMap.to_seq |> HeapIdMap.of_seq;
+  }
 
 type terminator_result =
   (* each item corresponds to an input state *)
@@ -501,7 +518,7 @@ and flow_block_before_join
               state.local_env;
         }
       in
-      gc_heap state)
+      state |> gc_heap |> normalize_state)
     states
 
 and flow_block_post_phi (fixed_env : fixed_env) (block : Ir.block)

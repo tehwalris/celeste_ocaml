@@ -49,6 +49,11 @@ module LocalIdMap = Map.Make (struct
   let compare = Stdlib.compare
 end)
 
+let show_local_id_map show_v s =
+  s |> LocalIdMap.bindings
+  |> List.map (fun (k, v) -> Printf.sprintf "%d -> %s" k (show_v v))
+  |> String.concat "; "
+
 module LocalIdSet = Set.Make (struct
   type t = local_id
 
