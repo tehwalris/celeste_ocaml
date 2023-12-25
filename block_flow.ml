@@ -57,65 +57,34 @@ let make_flow_function (flow_block_phi : Ir.label -> Ir.block -> 'a -> 'a)
     (flow_branch : Ir.terminator -> Ir.label -> 'a -> 'a)
     (flow_return : Ir.terminator -> 'a -> 'a) (cfg : Ir.cfg) :
     G.E.t -> 'a option -> 'a option =
-  let named_blocks =
-    cfg.named |> List.to_seq
-    |> Seq.map (fun (k, v) -> (k, (v, 0)))
-    |> Ir.LabelMap.of_seq
-  in
-  let named_blocks =
-    let target_labels =
-      List.concat_map
-        (fun source_block ->
-          match source_block.Ir.terminator with
-          | _, Ret _ -> []
-          | _, Br l -> [ l ]
-          | _, Cbr (_, l_true, l_false) -> [ l_true; l_false ])
-        (cfg.entry :: List.map snd cfg.named)
-    in
-    List.fold_left
-      (fun named_blocks l ->
-        let b, d = Ir.LabelMap.find l named_blocks in
-        Ir.LabelMap.add l (b, d + 1) named_blocks)
-      named_blocks target_labels
-  in
-  let noop_if_degree_1 in_degree f =
-    assert (in_degree > 0);
-    fun v -> if in_degree > 1 then f v else v
-  in
+  let named_blocks = cfg.named |> List.to_seq |> Ir.LabelMap.of_seq in
   let flow_some edge =
     match edge with
     | BeforeEntryBlock, AfterEntryBlock -> flow_block_post_phi cfg.entry
     | BeforeNamedBlock name, AfterNamedBlock other_name when name = other_name
       ->
-        flow_block_post_phi (fst @@ Ir.LabelMap.find name named_blocks)
+        flow_block_post_phi (Ir.LabelMap.find name named_blocks)
     | AfterEntryBlock, BeforeNamedBlock target_name ->
         let _, terminator = cfg.entry.terminator in
-        let target_block, target_block_in_degree =
-          Ir.LabelMap.find target_name named_blocks
-        in
-        assert (target_block_in_degree > 0);
+        let target_block = Ir.LabelMap.find target_name named_blocks in
         fun v ->
           v
           |> flow_branch terminator target_name
-          |> noop_if_degree_1 target_block_in_degree
-               (flow_block_before_join target_block)
+          |> flow_block_before_join target_block
     | AfterNamedBlock source_name, BeforeNamedBlock target_name ->
-        let source_block, _ = Ir.LabelMap.find source_name named_blocks in
-        let target_block, target_block_in_degree =
-          Ir.LabelMap.find target_name named_blocks
-        in
+        let source_block = Ir.LabelMap.find source_name named_blocks in
+        let target_block = Ir.LabelMap.find target_name named_blocks in
         let _, terminator = source_block.terminator in
         fun v ->
           v
           |> flow_branch terminator target_name
           |> flow_block_phi source_name target_block
-          |> noop_if_degree_1 target_block_in_degree
-               (flow_block_before_join target_block)
+          |> flow_block_before_join target_block
     | AfterEntryBlock, Return ->
         let _, terminator = cfg.entry.terminator in
         flow_return terminator
     | AfterNamedBlock source_name, Return ->
-        let source_block, _ = Ir.LabelMap.find source_name named_blocks in
+        let source_block = Ir.LabelMap.find source_name named_blocks in
         let _, terminator = source_block.terminator in
         flow_return terminator
     | _ -> failwith "flow has unexpected edge"
