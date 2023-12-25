@@ -655,14 +655,14 @@ and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
         let join =
           let inner = Flow.lift_join StateAndMaybeReturnSet.union in
           fun a b ->
-            incr_mut Perf.global_counters.flow_join;
+            Perf.count_and_time Perf.global_counters.flow_join @@ fun () ->
             inner a b
 
         let accumulate (accumulated : StateAndMaybeReturnSet.t option)
             (potentially_new : StateAndMaybeReturnSet.t option) :
             StateAndMaybeReturnSet.t option
             * StateAndMaybeReturnSet.t option option =
-          incr_mut Perf.global_counters.flow_accumulate;
+          Perf.count_and_time Perf.global_counters.flow_accumulate @@ fun () ->
           let is_empty = function
             | Some (StateAndMaybeReturnSet.StateSet states) ->
                 StateSet.is_empty states

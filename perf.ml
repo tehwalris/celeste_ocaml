@@ -30,8 +30,8 @@ type counters = {
   closure_call : int ref;
   gc : timed_counter ref;
   normalize_state : int ref;
-  flow_join : int ref;
-  flow_accumulate : int ref;
+  flow_join : timed_counter ref;
+  flow_accumulate : timed_counter ref;
   flow_accumulate_diff : int ref;
   flow_analyze : timed_counter ref;
   fixpoint : timed_counter ref;
@@ -48,8 +48,8 @@ let global_counters : counters =
     closure_call = ref 0;
     gc = ref empty_timed_counter;
     normalize_state = ref 0;
-    flow_join = ref 0;
-    flow_accumulate = ref 0;
+    flow_join = ref empty_timed_counter;
+    flow_accumulate = ref empty_timed_counter;
     flow_accumulate_diff = ref 0;
     flow_analyze = ref empty_timed_counter;
     fixpoint = ref empty_timed_counter;
@@ -84,8 +84,10 @@ let print_counters () =
   Printf.printf "  closure_call: %d\n" !(global_counters.closure_call);
   Printf.printf "  gc: %s\n" @@ show_timed_counter !(global_counters.gc);
   Printf.printf "  normalize_state: %d\n" !(global_counters.normalize_state);
-  Printf.printf "  flow_join: %d\n" !(global_counters.flow_join);
-  Printf.printf "  flow_accumulate: %d\n" !(global_counters.flow_accumulate);
+  Printf.printf "  flow_join: %s\n"
+  @@ show_timed_counter !(global_counters.flow_join);
+  Printf.printf "  flow_accumulate: %s\n"
+  @@ show_timed_counter !(global_counters.flow_accumulate);
   Printf.printf "  flow_accumulate_diff: %d\n"
     !(global_counters.flow_accumulate_diff);
   Printf.printf "  flow_analyze: %s\n"
