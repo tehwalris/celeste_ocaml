@@ -7,19 +7,19 @@ let builtin_new_unknown_boolean : builtin_fun =
   assert (args = []);
   (state, VUnknownBool)
 
-let print_to_string args =
-  match args with
-  | [ VNumber n ] -> Int.to_string @@ Pico_number.int_of n
-  | [ VBool b ] -> if b then "true" else "false"
-  | [ VString s ] -> s
-  | [ VNil ] -> "nil"
+let print_to_string arg =
+  match arg with
+  | VNumber n -> Int.to_string @@ Pico_number.int_of n
+  | VBool b -> if b then "true" else "false"
+  | VString s -> s
+  | VNil -> "nil"
   | _ -> failwith "Wrong args"
 
 let builtin_debug : builtin_fun =
  fun state args ->
   Printf.printf "debug: %s\n%!"
   @@ String.concat " "
-  @@ List.map (fun arg -> print_to_string [ arg ]) args;
+  @@ List.map (fun arg -> print_to_string arg) args;
   (state, VNil)
 
 let level_1_builtins =
@@ -32,7 +32,15 @@ let level_1_builtins =
 
 let builtin_print : builtin_fun =
  fun state args ->
-  let state = { state with prints = print_to_string args :: state.prints } in
+  let arg =
+    match args with
+    | [ v ] | [ v; _ ] | [ v; _; _ ] | [ v; _; _; _ ] -> v
+    | _ ->
+        failwith
+          "Wrong number of args (print is defined with 1-4 args, but only the \
+           first is the string, like Pico 8 print)"
+  in
+  let state = { state with prints = print_to_string arg :: state.prints } in
   (state, VNil)
 
 let builtin_error : builtin_fun =

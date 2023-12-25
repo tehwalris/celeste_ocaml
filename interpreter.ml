@@ -599,9 +599,9 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                 in
                 let inner_result =
                   try
-                interpret_cfg fixed_env
-                  (LazyStateSet.of_list [ inner_state ])
-                  fun_def.cfg
+                    interpret_cfg fixed_env
+                      (LazyStateSet.of_list [ inner_state ])
+                      fun_def.cfg
                   with err ->
                     Printf.eprintf "Error in function %s\n" fun_global_id;
                     raise err
