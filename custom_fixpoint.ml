@@ -57,6 +57,8 @@ module type G = sig
     val src : t -> V.t
   end
 
+  val iter_vertex : (V.t -> unit) -> t -> unit
+  val iter_succ : (V.t -> unit) -> t -> V.t -> unit
   val fold_vertex : (V.t -> 'a -> 'a) -> t -> 'a -> 'a
   val succ_e : t -> V.t -> E.t list
   val pred_e : t -> V.t -> E.t list
@@ -72,32 +74,44 @@ module Make
            with type vertex = G.V.t) =
 struct
   module M = Map.Make (G.V)
-  module N = Set.Make (G.V)
+
+  module N = Set.Make (struct
+    type t = int * G.V.t
+
+    let compare = compare
+  end)
+
+  module Topological = Graph.Topological.Make (G)
 
   let analyze debug initial g =
     let nodes, m_data_acc, m_data_new =
       G.fold_vertex
         (fun vertex (n, m_data_acc, m_data_new) ->
-          ( (if initial vertex = A.empty then n else N.add vertex n),
+          ( (if initial vertex = A.empty then n else vertex :: n),
             M.add vertex A.empty m_data_acc,
             M.add vertex
               (G.succ_e g vertex |> List.to_seq
               |> Seq.map (fun edge -> (G.E.dst edge, initial vertex))
               |> M.of_seq)
               m_data_new ))
-        g
-        (N.empty, M.empty, M.empty)
+        g ([], M.empty, M.empty)
     in
     (* generate an associative map to quickly find the incoming
      * edges of a node during the anaysis store a pair of
      * a partially applied analysis function and the corresponding
      * 'partner' node *)
-    let nodemap : ((A.data -> A.data) * G.V.t) list M.t =
+    (* the second element of the tuple is used for ordering nodes in the worklist *)
+    let nodemap : (((A.data -> A.data) * G.V.t) list * int) M.t =
       let add n =
         let preds = G.pred_e g n in
         List.map (fun edge -> (A.analyze edge, G.E.src edge)) preds
       in
-      G.fold_vertex (fun vertex m -> M.add vertex (add vertex) m) g M.empty
+      let nodemap, _ =
+        Topological.fold
+          (fun vertex (m, i) -> (M.add vertex (add vertex, i) m, i + 1))
+          g (M.empty, 0)
+      in
+      nodemap
     in
 
     let rec worklist (m_data_acc : A.data M.t) (m_data_new : A.data M.t M.t)
@@ -110,16 +124,20 @@ struct
       let analyze_node analysis n m_data_acc m_data_new wl =
         match analysis m_data_acc m_data_new n with
         | m_data_acc, m_data_new, false -> (m_data_acc, m_data_new, wl)
-        | m_data_acc, m_data_new, true -> (m_data_acc, m_data_new, N.add n wl)
+        | m_data_acc, m_data_new, true ->
+            ( m_data_acc,
+              m_data_new,
+              let _, i = M.find n nodemap in
+              N.add (i, n) wl )
       in
 
       (* get some node from the node-set -- this will eventually trigger
            an exception *)
-      match try Some (N.choose wl) with Not_found -> None with
+      match N.min_elt_opt wl with
       | None -> m_data_acc
-      | Some n ->
+      | Some (i, n) ->
           (* remove the chosen node from the set *)
-          let wl = N.remove n wl in
+          let wl = N.remove (i, n) wl in
 
           let f, ns =
             (* analyze all INCOMING edges of all SUCCESSOR nodes of the
@@ -130,7 +148,7 @@ struct
                for this node, return a new tuple, else None *)
             let new_node_data (m_data_acc : A.data M.t)
                 (m_data_new : A.data M.t M.t) node =
-              let edges = M.find node nodemap in
+              let edges, _ = M.find node nodemap in
               let analysis =
                 List.map
                   (fun (f, src) -> M.find src m_data_new |> M.find node |> f)
@@ -189,6 +207,13 @@ struct
            * Not_found exception when no nodes are left in the work list *)
           worklist m_data_acc m_data_new wl
     in
-    let m_data_acc = worklist m_data_acc m_data_new nodes in
+    let wl =
+      nodes |> List.to_seq
+      |> Seq.map (fun n ->
+             let _, i = M.find n nodemap in
+             (i, n))
+      |> N.of_seq
+    in
+    let m_data_acc = worklist m_data_acc m_data_new wl in
     fun n -> M.find n m_data_acc
 end
