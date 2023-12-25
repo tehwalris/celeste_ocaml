@@ -201,7 +201,7 @@ let map_heap_value_references f v : heap_value =
       HClosure (global_id, List.map (map_value_references f) captures)
   | HBuiltinFun name -> HBuiltinFun name
 
-let gc_heap (state : state) : state =
+let gc_heap_and_normalize_state (state : state) : state =
   Perf.count_and_time Perf.global_counters.gc @@ fun () ->
   let old_heap = state.heap in
   let new_heap = ref HeapIdMap.empty in
@@ -221,31 +221,36 @@ let gc_heap (state : state) : state =
         new_heap := HeapIdMap.add new_id visited_value !new_heap;
         new_id
   in
+
+  (* The = operator for maps considers the internal tree structure, not just the
+     contained values like Map.equal. The result of this function is normalized so
+     that = works correctly for our state by rebuilding all maps so that their
+     internal tree structure is identical if their values are identical. *)
   let state =
     {
-      state with
-      global_env = StringMap.map visit state.global_env;
-      local_env = Ir.LocalIdMap.map (map_value_references visit) state.local_env;
+      heap = HeapIdMap.empty;
+      global_env =
+        state.global_env |> StringMap.to_seq
+        |> Seq.map (fun (k, v) -> (k, visit v))
+        |> StringMap.of_seq;
+      local_env =
+        state.local_env |> Ir.LocalIdMap.to_seq
+        |> Seq.map (fun (k, v) -> (k, map_value_references visit v))
+        |> Ir.LocalIdMap.of_seq;
       outer_local_envs =
-        List.map
+        (* List.map
           (Ir.LocalIdMap.map @@ map_value_references visit)
+           state.outer_local_envs; *)
+        List.map
+          (fun local_env ->
+            local_env |> Ir.LocalIdMap.to_seq
+            |> Seq.map (fun (k, v) -> (k, map_value_references visit v))
+            |> Ir.LocalIdMap.of_seq)
           state.outer_local_envs;
+      prints = state.prints;
     }
   in
   { state with heap = !new_heap }
-
-let normalize_state state =
-  (* The = operator for maps considers the internal tree structure, not just the
-     contained values like Map.equal. This normalize function makes = work
-     correctly for our state by rebuilding all maps so that their internal tree
-     structure is identical if their values are identical. *)
-  Perf.count_and_time Perf.global_counters.normalize_state @@ fun () ->
-  {
-    state with
-    global_env = state.global_env |> StringMap.to_seq |> StringMap.of_seq;
-    local_env = state.local_env |> Ir.LocalIdMap.to_seq |> Ir.LocalIdMap.of_seq;
-    heap = state.heap |> HeapIdMap.to_seq |> HeapIdMap.of_seq;
-  }
 
 type terminator_result =
   (* each item corresponds to an input state *)
@@ -611,7 +616,7 @@ and flow_block_before_join
               state.local_env;
         }
       in
-      state |> gc_heap |> normalize_state)
+      state |> gc_heap_and_normalize_state)
     states
 
 and flow_block_post_phi (fixed_env : fixed_env) (block : Ir.block)
@@ -662,7 +667,7 @@ and flow_return (terminator : Ir.terminator) (states : StateSet.t) :
             @@ Ir.LocalIdMap.find local_id state.local_env
         | None -> Ir.LocalIdMap.empty);
     }
-    |> gc_heap |> normalize_state
+    |> gc_heap_and_normalize_state
   in
   match terminator with
   | Ir.Ret (Some local_id) ->
