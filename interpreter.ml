@@ -503,23 +503,9 @@ and interpret_terminator (states : state list) (terminator : Ir.terminator) :
              List.map (fun label -> (label, state)) labels)
            states)
 
-and split_block_phi_instructions (block : Ir.block) =
-  let is_phi = function _, Ir.Phi _ -> true | _ -> false in
-  let unwrap_phi = function
-    | id, Ir.Phi v -> (id, v)
-    | _ -> failwith "Not a phi instruction"
-  in
-  let phi_instructions, non_phi_instructions =
-    BatList.span is_phi block.instructions
-  in
-  let phi_instructions = List.map unwrap_phi phi_instructions in
-  if List.exists is_phi non_phi_instructions then
-    failwith "Phi instructions are not at the beginning of the block";
-  (phi_instructions, non_phi_instructions)
-
 and flow_block_phi (source_block_name : Ir.label) (target_block : Ir.block)
     (states : StateSet.t) : StateSet.t =
-  let phi_instructions, _ = split_block_phi_instructions target_block in
+  let phi_instructions, _ = Ir.split_block_phi_instructions target_block in
   StateSet.map
     (fun state ->
       List.fold_left
@@ -567,7 +553,7 @@ and flow_block_before_join
 
 and flow_block_post_phi (fixed_env : fixed_env) (block : Ir.block)
     (states : StateSet.t) : StateSet.t =
-  let _, non_phi_instructions = split_block_phi_instructions block in
+  let _, non_phi_instructions = Ir.split_block_phi_instructions block in
   let states =
     states |> StateSet.to_seq |> List.of_seq |> fun states ->
     List.fold_left

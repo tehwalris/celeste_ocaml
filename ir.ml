@@ -105,3 +105,17 @@ let cfg_map_blocks (f : block -> block) (cfg : cfg) : cfg =
     entry = f cfg.entry;
     named = List.map (fun (id, block) -> (id, f block)) cfg.named;
   }
+
+let split_block_phi_instructions (block : block) =
+  let is_phi = function _, Phi _ -> true | _ -> false in
+  let unwrap_phi = function
+    | id, Phi v -> (id, v)
+    | _ -> failwith "Not a phi instruction"
+  in
+  let phi_instructions, non_phi_instructions =
+    BatList.span is_phi block.instructions
+  in
+  let phi_instructions = List.map unwrap_phi phi_instructions in
+  if List.exists is_phi non_phi_instructions then
+    failwith "Phi instructions are not at the beginning of the block";
+  (phi_instructions, non_phi_instructions)

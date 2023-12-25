@@ -5,6 +5,7 @@
   block_flow
   builtin
   bypass_redundant_loads
+  contract_blocks
   custom_fixpoint
   flow
   frontend

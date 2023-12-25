@@ -61,10 +61,11 @@ let cfg_of_stream (code : stream) : Ir.cfg * Ir.fun_def list =
               fun_def :: fun_defs ))
       ([], None, [], []) code
   in
-  ( {
-      entry = make_block unused_instructions unused_terminator;
-      named = named_blocks;
-    },
+  ( Contract_blocks.contract_blocks
+      {
+        entry = make_block unused_instructions unused_terminator;
+        named = named_blocks;
+      },
     fun_defs )
 
 module Ctxt = struct
