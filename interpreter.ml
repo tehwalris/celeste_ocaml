@@ -18,10 +18,22 @@ type value =
   | VPointer of heap_id
 [@@deriving show]
 
+module ListForArrayTable = struct
+  type item = heap_id
+  type t = item Array.t
+
+  let empty = [||]
+  let get t i = t.(i)
+  let append t item = Array.append t [| item |]
+  let map = Array.map
+  let length = Array.length
+  let nth_opt t i = if i < Array.length t then Some t.(i) else None
+end
+
 type heap_value =
   | HValue of value
   | HObjectTable of (string * heap_id) list
-  | HArrayTable of heap_id list
+  | HArrayTable of ListForArrayTable.t
   | HUnknownTable
   | HClosure of Ir.global_id * value list
   | HBuiltinFun of string
@@ -148,7 +160,7 @@ let map_heap_value_references f v : heap_value =
   match v with
   | HValue value -> HValue (map_value_references f value)
   | HObjectTable items -> HObjectTable (List.map (fun (k, v) -> (k, f v)) items)
-  | HArrayTable items -> HArrayTable (List.map f items)
+  | HArrayTable items -> HArrayTable (ListForArrayTable.map f items)
   | HUnknownTable -> HUnknownTable
   | HClosure (global_id, captures) ->
       HClosure (global_id, List.map (map_value_references f) captures)
@@ -215,7 +227,8 @@ let interpret_unary_op (state : state) (op : string) (v : value) : value =
   | "#", VPointer heap_id -> (
       let table = HeapIdMap.find heap_id state.heap in
       match table with
-      | HArrayTable items -> VNumber (Pico_number.of_int @@ List.length items)
+      | HArrayTable items ->
+          VNumber (Pico_number.of_int @@ ListForArrayTable.length items)
       | HUnknownTable -> VNumber (Pico_number.of_int 0)
       | _ -> failwith @@ Printf.sprintf "Expected HArrayTable or HUnknownTable")
   | op, v ->
@@ -377,14 +390,14 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
           let old_fields =
             match HeapIdMap.find table_heap_id state.heap with
             | HArrayTable old_fields -> old_fields
-            | HUnknownTable -> []
+            | HUnknownTable -> ListForArrayTable.empty
             | _ ->
                 failwith
                   "GetIndex called on something that's not an array-like table \
                    or unknown table"
           in
           let state, field_heap_id =
-            match List.nth_opt old_fields (index - 1) with
+            match ListForArrayTable.nth_opt old_fields (index - 1) with
             | Some field_heap_id -> (state, field_heap_id)
             | None ->
                 if not create_if_missing then
@@ -392,7 +405,9 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                 let state, field_heap_id = state_heap_add state (HValue VNil) in
                 let state =
                   state_heap_update state
-                    (fun _ -> HArrayTable (old_fields @ [ field_heap_id ]))
+                    (fun _ ->
+                      HArrayTable
+                        (ListForArrayTable.append old_fields field_heap_id))
                     table_heap_id
                 in
                 (state, field_heap_id)
