@@ -5,8 +5,7 @@ _init()
 |}
 
 let () =
-  Perf.global_counters.enable_printing := true;
-
+  (* Perf.global_counters.enable_printing := true; *)
   let lua_code =
     BatFile.with_file_in "celeste-standard-syntax.lua" BatIO.read_all
   in
@@ -37,6 +36,7 @@ let () =
       (Interpreter.StateSet.singleton initial_state)
       cfg
   in
+  Perf.print_counters ();
   let states =
     match states_and_maybe_returns with
     | Interpreter.StateAndMaybeReturnSet.StateSet states -> states
