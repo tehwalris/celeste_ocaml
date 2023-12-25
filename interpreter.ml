@@ -597,9 +597,16 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                     outer_local_envs = state.local_env :: state.outer_local_envs;
                   }
                 in
+                let inner_result =
+                  try
                 interpret_cfg fixed_env
                   (LazyStateSet.of_list [ inner_state ])
                   fun_def.cfg
+                  with err ->
+                    Printf.eprintf "Error in function %s\n" fun_global_id;
+                    raise err
+                in
+                inner_result
                 |> (function
                      | StateAndMaybeReturnSet.StateSet inner_states ->
                          inner_states
