@@ -663,7 +663,7 @@ and interpret_terminator (states : state list) (terminator : Ir.terminator) :
 and flow_block_phi (source_block_name : Ir.label) (target_block : Ir.block)
     (states : LazyStateSet.t) : LazyStateSet.t =
   if !debug_prints then
-  Printf.printf "before flow_block_phi (%s)\n" @@ debug_states states;
+    Printf.printf "before flow_block_phi (%s)\n" @@ debug_states states;
   let phi_instructions, _ = Ir.split_block_phi_instructions target_block in
   LazyStateSet.map
     (fun state ->
@@ -686,7 +686,7 @@ and flow_block_before_join
       Flow.flow_side * Ir.local_id -> Ir.LocalIdSet.t option)
     (target_block : Ir.block) (states : LazyStateSet.t) : LazyStateSet.t =
   if !debug_prints then
-  Printf.printf "before flow_block_before_join (%s)\n" @@ debug_states states;
+    Printf.printf "before flow_block_before_join (%s)\n" @@ debug_states states;
   let terminator_local_id, _ = target_block.terminator in
   let first_non_phi_local_id =
     target_block.instructions
@@ -711,7 +711,7 @@ and flow_block_before_join
       states
   in
   if !debug_prints then
-  Printf.printf "after flow_block_before_join (%s)\n" @@ debug_states states;
+    Printf.printf "after flow_block_before_join (%s)\n" @@ debug_states states;
   states
 
 and flow_block_post_phi (fixed_env : fixed_env) (block : Ir.block)
@@ -739,7 +739,7 @@ and flow_block_post_phi (fixed_env : fixed_env) (block : Ir.block)
 and flow_branch (terminator : Ir.terminator) (flow_target : Ir.label)
     (states : LazyStateSet.t) : LazyStateSet.t =
   if !debug_prints then
-  Printf.printf "before flow_branch (%s)\n" @@ debug_states states;
+    Printf.printf "before flow_branch (%s)\n" @@ debug_states states;
   match terminator with
   | Ir.Br terminator_target when terminator_target = flow_target -> states
   | Ir.Cbr (local_id, true_label, false_label)
@@ -875,7 +875,7 @@ and interpret_cfg (fixed_env : fixed_env) (states : LazyStateSet.t)
     else None
   in
   Perf.count_and_time Perf.global_counters.fixpoint @@ fun () ->
-  Option.get @@ CfgFixpoint.analyze true init g Block_flow.Return
+  Option.get @@ CfgFixpoint.analyze !debug_prints init g Block_flow.Return
 
 let init (fun_defs : Ir.fun_def list) (builtins : (string * builtin_fun) list) :
     fixed_env * state =
