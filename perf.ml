@@ -31,7 +31,7 @@ type counters = {
   builtin_call : int ref;
   closure_call : int ref;
   gc : timed_counter ref;
-  normalize_state : timed_counter ref;
+  normalize_state_maps_except_heap : timed_counter ref;
   flow_join : timed_counter ref;
   flow_accumulate : timed_counter ref;
   flow_analyze : timed_counter ref;
@@ -51,7 +51,7 @@ let global_counters : counters =
     builtin_call = ref 0;
     closure_call = ref 0;
     gc = ref empty_timed_counter;
-    normalize_state = ref empty_timed_counter;
+    normalize_state_maps_except_heap = ref empty_timed_counter;
     flow_join = ref empty_timed_counter;
     flow_accumulate = ref empty_timed_counter;
     flow_analyze = ref empty_timed_counter;
@@ -90,8 +90,8 @@ let print_counters () =
   Printf.printf "  builtin_call: %d\n" !(global_counters.builtin_call);
   Printf.printf "  closure_call: %d\n" !(global_counters.closure_call);
   Printf.printf "  gc: %s\n" @@ show_timed_counter !(global_counters.gc);
-  Printf.printf "  normalize_state: %s\n"
-  @@ show_timed_counter !(global_counters.normalize_state);
+  Printf.printf "  normalize_state_maps_except_heap: %s\n"
+  @@ show_timed_counter !(global_counters.normalize_state_maps_except_heap);
   Printf.printf "  flow_join: %s\n"
   @@ show_timed_counter !(global_counters.flow_join);
   Printf.printf "  flow_accumulate: %s\n"
