@@ -311,7 +311,8 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
   then Perf.print_counters ();
   let handle_separately_no_phi (f : state -> state * value) :
       (state * value) list * Ir.label option =
-    (List.map f states, None)
+    Perf.count_and_time Perf.global_counters.handle_separately_no_phi
+    @@ fun () -> (List.map f states, None)
   in
   match insn with
   | Alloc ->

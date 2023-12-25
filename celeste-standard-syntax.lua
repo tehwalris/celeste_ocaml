@@ -1128,7 +1128,7 @@ function load_room(x,y)
 	room.y = y
 
 	-- entities
-	for tx=0,15 do
+	for tx=0,3 do -- TODO full loop
 		__debug("tx", tx)
 		for ty=0,15 do
 			__debug("tx", tx, "ty", ty)

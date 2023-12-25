@@ -27,6 +27,7 @@ type counters = {
   reset_at : timer ref;
   (* Normal counters *)
   interpret_non_phi_instruction : int ref;
+  handle_separately_no_phi : timed_counter ref;
   builtin_call : int ref;
   closure_call : int ref;
   gc : timed_counter ref;
@@ -37,6 +38,7 @@ type counters = {
   fixpoint : timed_counter ref;
   fixpoint_created_node : int ref;
   fixpoint_created_edge : int ref;
+  fixpoint_prepare : timed_counter ref;
 }
 [@@deriving show]
 
@@ -45,6 +47,7 @@ let global_counters : counters =
     enable_printing = ref false;
     reset_at = ref @@ Mtime_clock.counter ();
     interpret_non_phi_instruction = ref 0;
+    handle_separately_no_phi = ref empty_timed_counter;
     builtin_call = ref 0;
     closure_call = ref 0;
     gc = ref empty_timed_counter;
@@ -55,6 +58,7 @@ let global_counters : counters =
     fixpoint = ref empty_timed_counter;
     fixpoint_created_node = ref 0;
     fixpoint_created_edge = ref 0;
+    fixpoint_prepare = ref empty_timed_counter;
   }
 
 let usecs_of_span span =
@@ -81,6 +85,8 @@ let print_counters () =
   @@ Mtime_clock.count !(global_counters.reset_at);
   Printf.printf "  interpret_non_phi_instruction: %d\n"
     !(global_counters.interpret_non_phi_instruction);
+  Printf.printf "  handle_separately_no_phi: %s\n"
+  @@ show_timed_counter !(global_counters.handle_separately_no_phi);
   Printf.printf "  builtin_call: %d\n" !(global_counters.builtin_call);
   Printf.printf "  closure_call: %d\n" !(global_counters.closure_call);
   Printf.printf "  gc: %s\n" @@ show_timed_counter !(global_counters.gc);
@@ -98,6 +104,8 @@ let print_counters () =
     !(global_counters.fixpoint_created_node);
   Printf.printf "  fixpoint_created_edge: %d\n"
     !(global_counters.fixpoint_created_edge);
+  Printf.printf "  fixpoint_prepare: %s\n"
+  @@ show_timed_counter !(global_counters.fixpoint_prepare);
   Printf.printf "\n%!"
 
 let count_and_time (c : timed_counter ref) f =

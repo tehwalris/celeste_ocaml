@@ -84,34 +84,47 @@ struct
   module Topological = Graph.Topological.Make (G)
 
   let analyze debug initial g =
-    let nodes, m_data_acc, m_data_new =
-      G.fold_vertex
-        (fun vertex (n, m_data_acc, m_data_new) ->
-          ( (if initial vertex = A.empty then n else vertex :: n),
-            M.add vertex A.empty m_data_acc,
-            M.add vertex
-              (G.succ_e g vertex |> List.to_seq
-              |> Seq.map (fun edge -> (G.E.dst edge, initial vertex))
-              |> M.of_seq)
-              m_data_new ))
-        g ([], M.empty, M.empty)
-    in
-    (* generate an associative map to quickly find the incoming
-     * edges of a node during the anaysis store a pair of
-     * a partially applied analysis function and the corresponding
-     * 'partner' node *)
-    (* the second element of the tuple is used for ordering nodes in the worklist *)
-    let nodemap : (((A.data -> A.data) * G.V.t) list * int) M.t =
-      let add n =
-        let preds = G.pred_e g n in
-        List.map (fun edge -> (A.analyze edge, G.E.src edge)) preds
-      in
-      let nodemap, _ =
-        Topological.fold
-          (fun vertex (m, i) -> (M.add vertex (add vertex, i) m, i + 1))
-          g (M.empty, 0)
-      in
-      nodemap
+    let m_data_acc, m_data_new, nodemap, wl =
+      Perf.count_and_time Perf.global_counters.fixpoint_prepare (fun () ->
+          let nodes, m_data_acc, m_data_new =
+            G.fold_vertex
+              (fun vertex (n, m_data_acc, m_data_new) ->
+                ( (if initial vertex = A.empty then n else vertex :: n),
+                  M.add vertex A.empty m_data_acc,
+                  M.add vertex
+                    (G.succ_e g vertex |> List.to_seq
+                    |> Seq.map (fun edge -> (G.E.dst edge, initial vertex))
+                    |> M.of_seq)
+                    m_data_new ))
+              g ([], M.empty, M.empty)
+          in
+          (* generate an associative map to quickly find the incoming
+           * edges of a node during the anaysis store a pair of
+           * a partially applied analysis function and the corresponding
+           * 'partner' node *)
+          (* the second element of the tuple is used for ordering nodes in the worklist *)
+          let nodemap : (((A.data -> A.data) * G.V.t) list * int) M.t =
+            let add n =
+              let preds = G.pred_e g n in
+              List.map (fun edge -> (A.analyze edge, G.E.src edge)) preds
+            in
+            let nodemap, _ =
+              Topological.fold
+                (fun vertex (m, i) -> (M.add vertex (add vertex, i) m, i + 1))
+                g (M.empty, 0)
+            in
+            nodemap
+          in
+
+          let wl =
+            nodes |> List.to_seq
+            |> Seq.map (fun n ->
+                   let _, i = M.find n nodemap in
+                   (i, n))
+            |> N.of_seq
+          in
+
+          (m_data_acc, m_data_new, nodemap, wl))
     in
 
     let rec worklist (m_data_acc : A.data M.t) (m_data_new : A.data M.t M.t)
@@ -204,13 +217,6 @@ struct
           (* do a recursive call: the recursion will eventually end with a
            * Not_found exception when no nodes are left in the work list *)
           worklist m_data_acc m_data_new wl
-    in
-    let wl =
-      nodes |> List.to_seq
-      |> Seq.map (fun n ->
-             let _, i = M.find n nodemap in
-             (i, n))
-      |> N.of_seq
     in
     let m_data_acc = worklist m_data_acc m_data_new wl in
     fun n -> M.find n m_data_acc
