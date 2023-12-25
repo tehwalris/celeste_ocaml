@@ -1,11 +1,20 @@
 open Compiler_lib
 
+let prefix_code =
+  String.trim
+    {|
+new_bg = nil -- HACK the celeste code accesses this variable before it's initialized
+|}
+
 let suffix_code =
   String.trim
     {|
 -- TODO double check that the order is: init, update, draw, update, draw, ...
 _init()
+__reset_button_states()
 _update()
+_draw()
+__reset_button_states()
 |}
 
 let () =
@@ -19,6 +28,7 @@ let () =
          [
            BatFile.with_file_in "builtin_level_3.lua" BatIO.read_all;
            BatFile.with_file_in "builtin_level_4.lua" BatIO.read_all;
+           prefix_code;
            lua_code;
            suffix_code;
            "\n";
