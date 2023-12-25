@@ -13,4 +13,5 @@
     (ppx_deriving (>= 5.2.1))
     (ppx_inline_test (>= 0.14.1))
     (ocaml-lua (>= 1.8))
-    (re (>= 1.11.0))))
+    (re (>= 1.11.0))
+    (mtime (>= 2.0.0))))
