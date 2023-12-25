@@ -65,12 +65,13 @@ let run_our_lua_for_states lua_code =
   let cfg, fixed_env, state = prepare_to_run_our_lua lua_code in
   let states_and_maybe_returns =
     Interpreter.interpret_cfg fixed_env
-      (Interpreter.StateSet.singleton state)
+      (Interpreter.LazyStateSet.of_list [ state ])
       cfg
   in
   let states =
     match states_and_maybe_returns with
-    | Interpreter.StateAndMaybeReturnSet.StateSet states -> states
+    | Interpreter.StateAndMaybeReturnSet.StateSet states ->
+        Interpreter.LazyStateSet.to_normalized_state_set states
     | Interpreter.StateAndMaybeReturnSet.StateAndReturnSet _ ->
         failwith "Unexpected return value"
   in

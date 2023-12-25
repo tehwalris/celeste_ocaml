@@ -33,13 +33,14 @@ let () =
   in
   let states_and_maybe_returns =
     Interpreter.interpret_cfg fixed_env
-      (Interpreter.StateSet.singleton initial_state)
+      (Interpreter.LazyStateSet.of_list [ initial_state ])
       cfg
   in
   Perf.print_counters ();
   let states =
     match states_and_maybe_returns with
-    | Interpreter.StateAndMaybeReturnSet.StateSet states -> states
+    | Interpreter.StateAndMaybeReturnSet.StateSet states ->
+        Interpreter.LazyStateSet.to_normalized_state_set states
     | Interpreter.StateAndMaybeReturnSet.StateAndReturnSet _ ->
         failwith "Unexpected return value"
   in

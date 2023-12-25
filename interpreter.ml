@@ -176,6 +176,76 @@ module LazyStateSet = struct
     | NormalizedSet of StateSet.t
     | NormalizedList of state list
     | NonNormalizedList of state list
+
+  let empty = NormalizedList []
+
+  let is_empty = function
+    | NormalizedSet set -> StateSet.is_empty set
+    | NormalizedList [] -> true
+    | NormalizedList _ -> false
+    | NonNormalizedList [] -> true
+    | NonNormalizedList _ -> false
+
+  let to_non_normalized_non_deduped_seq (t : t) : state Seq.t =
+    match t with
+    | NormalizedSet set -> StateSet.to_seq set
+    | NormalizedList list -> List.to_seq list
+    | NonNormalizedList list -> List.to_seq list
+
+  let to_normalized_non_deduped_seq (t : t) : state Seq.t =
+    match t with
+    | NormalizedSet set -> StateSet.to_seq set
+    | NormalizedList list -> List.to_seq list
+    | NonNormalizedList list -> List.to_seq list |> Seq.map normalize_state
+
+  let of_list (list : state list) : t = NonNormalizedList list
+
+  let has_normalized_elements (t : t) : bool =
+    match t with
+    | NormalizedSet _ -> true
+    | NormalizedList _ -> true
+    | NonNormalizedList _ -> false
+
+  let rec true_union (a : t) (b : t) : t =
+    match (a, b) with
+    | NormalizedSet a, NormalizedSet b -> NormalizedSet (StateSet.union a b)
+    | NormalizedSet a, b ->
+        NormalizedSet (StateSet.add_seq (to_normalized_non_deduped_seq b) a)
+    | a, NormalizedSet b -> true_union (NormalizedSet b) a
+    | a, b ->
+        NormalizedSet
+          (Seq.append
+             (to_normalized_non_deduped_seq a)
+             (to_normalized_non_deduped_seq b)
+          |> StateSet.of_seq)
+
+  let to_normalized_state_set (t : t) : StateSet.t =
+    match t with
+    | NormalizedSet t -> t
+    | _ -> t |> to_normalized_non_deduped_seq |> StateSet.of_seq
+
+  let normalize (t : t) : t = NormalizedSet (to_normalized_state_set t)
+
+  let union (a : t) (b : t) : t =
+    (* TODO lazy *)
+    true_union a b
+
+  let union_diff (a : t) (b : t) : t * t =
+    (* TODO lazy *)
+    let a = to_normalized_state_set a in
+    let b = to_normalized_state_set b in
+    let union = StateSet.union a b in
+    let diff = StateSet.diff union b in
+    (NormalizedSet union, NormalizedSet diff)
+
+  let map (f : state -> state) (t : t) : t =
+    NonNormalizedList
+      (t |> to_non_normalized_non_deduped_seq |> Seq.map f |> List.of_seq)
+
+  let filter (f : state -> bool) = function
+    | NormalizedSet set -> NormalizedSet (StateSet.filter f set)
+    | NormalizedList list -> NormalizedList (List.filter f list)
+    | NonNormalizedList list -> NonNormalizedList (List.filter f list)
 end
 
 module StateAndReturnSet = Set.Make (struct
@@ -185,23 +255,16 @@ module StateAndReturnSet = Set.Make (struct
 end)
 
 module StateAndMaybeReturnSet = struct
-  type t = StateSet of StateSet.t | StateAndReturnSet of StateAndReturnSet.t
+  type t =
+    | StateSet of LazyStateSet.t
+    | StateAndReturnSet of StateAndReturnSet.t
 
   let union (a : t) (b : t) : t =
     match (a, b) with
-    | StateSet a, StateSet b -> StateSet (StateSet.union a b)
+    | StateSet a, StateSet b -> StateSet (LazyStateSet.union a b)
     | StateAndReturnSet a, StateAndReturnSet b ->
         StateAndReturnSet (StateAndReturnSet.union a b)
     | _ -> failwith "Cannot union StateSet and StateAndReturnSet"
-
-  let state_set_union_diff (a : StateSet.t) (b : StateSet.t) :
-      StateSet.t * StateSet.t =
-    StateSet.fold
-      (fun v (union, diff) ->
-        let new_union = StateSet.add v union in
-        if new_union == union then (union, diff)
-        else (new_union, StateSet.add v diff))
-      a (b, StateSet.empty)
 
   let state_and_return_set_union_diff (a : StateAndReturnSet.t)
       (b : StateAndReturnSet.t) : StateAndReturnSet.t * StateAndReturnSet.t =
@@ -217,22 +280,16 @@ module StateAndMaybeReturnSet = struct
   let union_diff (a : t) (b : t) : t * t =
     match (a, b) with
     | StateSet a, StateSet b ->
-        let union, diff = state_set_union_diff a b in
+        let union, diff = LazyStateSet.union_diff a b in
         (StateSet union, StateSet diff)
     | StateAndReturnSet a, StateAndReturnSet b ->
         let union, diff = state_and_return_set_union_diff a b in
         (StateAndReturnSet union, StateAndReturnSet diff)
     | _ -> failwith "Cannot union_diff StateSet and StateAndReturnSet"
 
-  let equal (a : t) (b : t) : bool =
-    match (a, b) with
-    | StateSet a, StateSet b -> StateSet.equal a b
-    | StateAndReturnSet a, StateAndReturnSet b -> StateAndReturnSet.equal a b
-    | _ -> false
-
   let is_empty (a : t) : bool =
     match a with
-    | StateSet a -> StateSet.is_empty a
+    | StateSet a -> LazyStateSet.is_empty a
     | StateAndReturnSet a -> StateAndReturnSet.is_empty a
 end
 
@@ -514,11 +571,12 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                   }
                 in
                 interpret_cfg fixed_env
-                  (StateSet.singleton inner_state)
+                  (LazyStateSet.of_list [ inner_state ])
                   fun_def.cfg
                 |> (function
                      | StateAndMaybeReturnSet.StateSet inner_states ->
-                         inner_states |> StateSet.to_seq
+                         inner_states
+                         |> LazyStateSet.to_non_normalized_non_deduped_seq
                          |> Seq.map (fun inner_state -> (inner_state, VNil))
                      | StateAndMaybeReturnSet.StateAndReturnSet
                          inner_states_and_returns ->
@@ -578,9 +636,9 @@ and interpret_terminator (states : state list) (terminator : Ir.terminator) :
            states)
 
 and flow_block_phi (source_block_name : Ir.label) (target_block : Ir.block)
-    (states : StateSet.t) : StateSet.t =
+    (states : LazyStateSet.t) : LazyStateSet.t =
   let phi_instructions, _ = Ir.split_block_phi_instructions target_block in
-  StateSet.map
+  LazyStateSet.map
     (fun state ->
       List.fold_left
         (fun state (local_id, local_ids_by_label) ->
@@ -599,7 +657,7 @@ and flow_block_phi (source_block_name : Ir.label) (target_block : Ir.block)
 and flow_block_before_join
     (live_variable_analysis :
       Flow.flow_side * Ir.local_id -> Ir.LocalIdSet.t option)
-    (target_block : Ir.block) (states : StateSet.t) : StateSet.t =
+    (target_block : Ir.block) (states : LazyStateSet.t) : LazyStateSet.t =
   let terminator_local_id, _ = target_block.terminator in
   let first_non_phi_local_id =
     target_block.instructions
@@ -611,7 +669,7 @@ and flow_block_before_join
   let live_variables =
     Option.get @@ live_variable_analysis (Flow.Before, first_non_phi_local_id)
   in
-  StateSet.map
+  LazyStateSet.map
     (fun state ->
       let state =
         {
@@ -622,14 +680,17 @@ and flow_block_before_join
               state.local_env;
         }
       in
+      (* TODO don't normalize here *)
       state |> normalize_state)
     states
 
 and flow_block_post_phi (fixed_env : fixed_env) (block : Ir.block)
-    (states : StateSet.t) : StateSet.t =
+    (states : LazyStateSet.t) : LazyStateSet.t =
   let _, non_phi_instructions = Ir.split_block_phi_instructions block in
   let states =
-    states |> StateSet.to_seq |> List.of_seq |> fun states ->
+    states |> LazyStateSet.to_non_normalized_non_deduped_seq |> List.of_seq
+  in
+  let states =
     List.fold_left
       (fun states (local_id, insn) ->
         let results, _ = interpret_non_phi_instruction fixed_env states insn in
@@ -642,26 +703,26 @@ and flow_block_post_phi (fixed_env : fixed_env) (block : Ir.block)
           results)
       states non_phi_instructions
   in
-  let states = StateSet.of_list states in
+  let states = LazyStateSet.of_list states in
   states
 
 and flow_branch (terminator : Ir.terminator) (flow_target : Ir.label)
-    (states : StateSet.t) : StateSet.t =
+    (states : LazyStateSet.t) : LazyStateSet.t =
   match terminator with
   | Ir.Br terminator_target when terminator_target = flow_target -> states
   | Ir.Cbr (local_id, true_label, false_label)
     when flow_target = true_label || flow_target = false_label ->
-      StateSet.filter_map
+      LazyStateSet.filter
         (fun state ->
           match Ir.LocalIdMap.find local_id state.local_env with
-          | VBool v when v = (flow_target = true_label) -> Some state
-          | VBool _ -> None
-          | VUnknownBool -> Some state
+          | VBool v when v = (flow_target = true_label) -> true
+          | VBool _ -> false
+          | VUnknownBool -> true
           | _ -> failwith "Cbr called on non-boolean value")
         states
   | _ -> failwith "Unexpected flow"
 
-and flow_return (terminator : Ir.terminator) (states : StateSet.t) :
+and flow_return (terminator : Ir.terminator) (states : LazyStateSet.t) :
     StateAndMaybeReturnSet.t =
   let clean_state_after_return preserved_local_id state =
     {
@@ -673,30 +734,30 @@ and flow_return (terminator : Ir.terminator) (states : StateSet.t) :
             @@ Ir.LocalIdMap.find local_id state.local_env
         | None -> Ir.LocalIdMap.empty);
     }
-    |> normalize_state
+    |> normalize_state (* TODO don't normalize here *)
   in
   match terminator with
   | Ir.Ret (Some local_id) ->
       StateAndMaybeReturnSet.StateAndReturnSet
-        (states |> StateSet.to_seq
+        (states |> LazyStateSet.to_non_normalized_non_deduped_seq
         |> Seq.map (fun state ->
                let state = clean_state_after_return (Some local_id) state in
                (state, Ir.LocalIdMap.find local_id state.local_env))
         |> StateAndReturnSet.of_seq)
   | Ir.Ret None ->
       StateAndMaybeReturnSet.StateSet
-        (StateSet.map (clean_state_after_return None) states)
+        (LazyStateSet.map (clean_state_after_return None) states)
   | _ -> failwith "Unexpected flow"
 
-and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
-    StateAndMaybeReturnSet.t =
-  let lift_no_return (f : StateSet.t -> StateSet.t) = function
+and interpret_cfg (fixed_env : fixed_env) (states : LazyStateSet.t)
+    (cfg : Ir.cfg) : StateAndMaybeReturnSet.t =
+  let lift_no_return (f : LazyStateSet.t -> LazyStateSet.t) = function
     | StateAndMaybeReturnSet.StateSet states ->
         StateAndMaybeReturnSet.StateSet (f states)
     | StateAndMaybeReturnSet.StateAndReturnSet _ ->
         failwith "Return value in unexpected part of CFG"
   in
-  let lift_return_out_only (f : StateSet.t -> StateAndMaybeReturnSet.t) =
+  let lift_return_out_only (f : LazyStateSet.t -> StateAndMaybeReturnSet.t) =
     function
     | StateAndMaybeReturnSet.StateSet states -> f states
     | StateAndMaybeReturnSet.StateAndReturnSet _ ->
@@ -725,10 +786,7 @@ and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
             * StateAndMaybeReturnSet.t option option =
           Perf.count_and_time Perf.global_counters.flow_accumulate @@ fun () ->
           let is_empty = function
-            | Some (StateAndMaybeReturnSet.StateSet states) ->
-                StateSet.is_empty states
-            | Some (StateAndMaybeReturnSet.StateAndReturnSet states) ->
-                StateAndReturnSet.is_empty states
+            | Some states -> StateAndMaybeReturnSet.is_empty states
             | None -> true
           in
           if is_empty potentially_new then (accumulated, None)
@@ -765,7 +823,9 @@ and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
 
         let show_data = function
           | Some (StateAndMaybeReturnSet.StateSet states) ->
-              Printf.sprintf "Some(StateSet %d)" (StateSet.cardinal states)
+              Printf.sprintf "Some(StateSet %d)"
+                (states |> LazyStateSet.to_normalized_state_set
+               |> StateSet.cardinal)
           | Some (StateAndMaybeReturnSet.StateAndReturnSet states) ->
               Printf.sprintf "Some(StateAndReturnSet %d)"
                 (StateAndReturnSet.cardinal states)
