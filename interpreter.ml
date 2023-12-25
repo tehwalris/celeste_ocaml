@@ -1,3 +1,4 @@
+let debug_prints = ref false
 let incr_mut r = r := !r + 1
 let add_to_mut r v = r := !r + v
 
@@ -163,7 +164,7 @@ let normalize_state_maps_except_heap (state : state) : state =
   }
 
 let normalize_state (state : state) : state =
-  Printf.printf "normalize_state\n";
+  if !debug_prints then Printf.printf "normalize_state\n";
   state |> normalize_state_maps_except_heap |> gc_heap
 
 module StateSet = Set.Make (struct
@@ -216,7 +217,7 @@ module LazyStateSet = struct
   let normalize (t : t) : t = NormalizedSet (to_normalized_state_set t)
 
   let union (a : t) (b : t) : t =
-    Printf.printf "union\n";
+    if !debug_prints then Printf.printf "union\n";
     if is_empty a then b
     else if is_empty b then a
     else
@@ -231,9 +232,9 @@ module LazyStateSet = struct
       else NonNormalizedList ab_list
 
   let union_diff (a : t) (b : t) : t * t =
-    Printf.printf "union diff b\n";
+    if !debug_prints then Printf.printf "union diff b\n";
     let b = to_normalized_state_set b in
-    Printf.printf "union diff rest\n";
+    if !debug_prints then Printf.printf "union diff rest\n";
     let union, diff =
       Seq.fold_left
         (fun (union, diff) v ->
@@ -661,6 +662,7 @@ and interpret_terminator (states : state list) (terminator : Ir.terminator) :
 
 and flow_block_phi (source_block_name : Ir.label) (target_block : Ir.block)
     (states : LazyStateSet.t) : LazyStateSet.t =
+  if !debug_prints then
   Printf.printf "before flow_block_phi (%s)\n" @@ debug_states states;
   let phi_instructions, _ = Ir.split_block_phi_instructions target_block in
   LazyStateSet.map
@@ -683,6 +685,7 @@ and flow_block_before_join
     (live_variable_analysis :
       Flow.flow_side * Ir.local_id -> Ir.LocalIdSet.t option)
     (target_block : Ir.block) (states : LazyStateSet.t) : LazyStateSet.t =
+  if !debug_prints then
   Printf.printf "before flow_block_before_join (%s)\n" @@ debug_states states;
   let terminator_local_id, _ = target_block.terminator in
   let first_non_phi_local_id =
@@ -707,6 +710,7 @@ and flow_block_before_join
         else { state with local_env = new_local_env })
       states
   in
+  if !debug_prints then
   Printf.printf "after flow_block_before_join (%s)\n" @@ debug_states states;
   states
 
@@ -734,6 +738,7 @@ and flow_block_post_phi (fixed_env : fixed_env) (block : Ir.block)
 
 and flow_branch (terminator : Ir.terminator) (flow_target : Ir.label)
     (states : LazyStateSet.t) : LazyStateSet.t =
+  if !debug_prints then
   Printf.printf "before flow_branch (%s)\n" @@ debug_states states;
   match terminator with
   | Ir.Br terminator_target when terminator_target = flow_target -> states
