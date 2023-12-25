@@ -16,7 +16,16 @@
   perf
   pico_number
   remove_dead_instructions)
- (libraries bigarray lua_parser.lib batteries tqdm ocamlgraph ocaml-lua re)
+ (libraries
+  bigarray
+  lua_parser.lib
+  batteries
+  tqdm
+  ocamlgraph
+  ocaml-lua
+  re
+  mtime
+  mtime.clock.os)
  (inline_tests
   (deps
    (glob_files lua_tests/*.lua)
