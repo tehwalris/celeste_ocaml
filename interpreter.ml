@@ -805,6 +805,12 @@ and interpret_cfg (fixed_env : fixed_env) (states : LazyStateSet.t)
         type data = StateAndMaybeReturnSet.t option
 
         let empty = None
+
+        let is_empty = function
+          | Some v -> StateAndMaybeReturnSet.is_empty v
+          | None -> true
+
+        let is_output = function Block_flow.Return -> true | _ -> false
         let untimed_join = Flow.lift_join StateAndMaybeReturnSet.union
 
         let join a b =

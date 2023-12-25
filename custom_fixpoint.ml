@@ -35,6 +35,8 @@ module type Analysis = sig
   type g
 
   val empty : data
+  val is_empty : data -> bool
+  val is_output : vertex -> bool
   val join : data -> data -> data
 
   (* accumulated -> potentially_new -> accumulated * actually_new *)
@@ -90,7 +92,10 @@ struct
             G.fold_vertex
               (fun vertex (n, m_data_acc, m_data_new) ->
                 ( (if initial vertex = A.empty then n else vertex :: n),
-                  M.add vertex A.empty m_data_acc,
+                  (match G.pred g vertex with
+                  | [] when not @@ A.is_output vertex -> m_data_acc
+                  | [ _ ] when not @@ A.is_output vertex -> m_data_acc
+                  | _ -> M.add vertex (initial vertex) m_data_acc),
                   M.add vertex
                     (G.succ_e g vertex |> List.to_seq
                     |> Seq.map (fun edge -> (G.E.dst edge, initial vertex))
@@ -175,31 +180,37 @@ struct
                       m_data_new)
                   m_data_new edges
               in
-              let data_acc = M.find node m_data_acc in
-              let potentially_new = meet (initial node) analysis in
-              let data_acc', actually_new =
-                A.accumulate data_acc potentially_new
+              let join_to_edges m_data_new d =
+                M.add node
+                  (M.map (fun old_d -> A.join d old_d) (M.find node m_data_new))
+                  m_data_new
               in
-              if debug then
-                Printf.printf
-                  "Analyzing node %s; data_acc = %s; potentially_new = %s; \
-                   data_acc' = %s; actually_new = %s\n"
-                  (A.show_vertex node) (A.show_data data_acc)
-                  (A.show_data potentially_new)
-                  (A.show_data data_acc')
-                  (match actually_new with
-                  | Some d -> Printf.sprintf "Some(%s)" @@ A.show_data d
-                  | None -> "None");
-              match actually_new with
-              | Some d ->
-                  Some
-                    ( M.add node data_acc' m_data_acc,
-                      M.add node
-                        (M.map
-                           (fun old_d -> A.join d old_d)
-                           (M.find node m_data_new))
-                        m_data_new )
-              | None -> None
+              let potentially_new = meet (initial node) analysis in
+              match M.find_opt node m_data_acc with
+              | Some data_acc -> (
+                  let data_acc', actually_new =
+                    A.accumulate data_acc potentially_new
+                  in
+                  if debug then
+                    Printf.printf
+                      "Analyzing node %s; data_acc = %s; potentially_new = %s; \
+                       data_acc' = %s; actually_new = %s\n"
+                      (A.show_vertex node) (A.show_data data_acc)
+                      (A.show_data potentially_new)
+                      (A.show_data data_acc')
+                      (match actually_new with
+                      | Some d -> Printf.sprintf "Some(%s)" @@ A.show_data d
+                      | None -> "None");
+                  match actually_new with
+                  | Some d ->
+                      Some
+                        ( M.add node data_acc' m_data_acc,
+                          join_to_edges m_data_new d )
+                  | None -> None)
+              | None ->
+                  if A.is_empty potentially_new then None
+                  else
+                    Some (m_data_acc, join_to_edges m_data_new potentially_new)
             in
 
             (new_node_data, G.succ g n)
