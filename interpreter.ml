@@ -155,11 +155,13 @@ let gc_heap (state : state) : state =
   let old_heap = state.heap in
   let new_heap = ref HeapIdMap.empty in
   let new_ids_by_old_ids = ref HeapIdMap.empty in
+  let next_id = ref 0 in
   let rec visit old_id =
     match HeapIdMap.find_opt old_id !new_ids_by_old_ids with
     | Some new_id -> new_id
     | None ->
-        let new_id = HeapIdMap.cardinal !new_ids_by_old_ids in
+        let new_id = !next_id in
+        next_id := !next_id + 1;
         new_ids_by_old_ids := HeapIdMap.add old_id new_id !new_ids_by_old_ids;
         assert (not (HeapIdMap.mem new_id !new_heap));
         let visited_value =
