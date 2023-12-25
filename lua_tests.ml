@@ -122,14 +122,16 @@ let load_lua_file filename =
   BatFile.with_file_in (BatFilename.concat "lua_tests" filename) BatIO.read_all
 
 let test_against_real_lua filename include_level_3 =
+  let lua_code = load_lua_file filename in
   let lua_code =
     if include_level_3 then
       BatFile.with_file_in "builtin_level_3.lua" BatIO.read_all
-      ^ "\n" ^ load_lua_file filename
-    else load_lua_file filename
+      ^ "\n" ^ lua_code
+    else lua_code
   in
+  let lua_code_for_real_lua = "__print = print\n" ^ lua_code in
   let actual_prints = run_our_lua_for_prints_no_branching lua_code in
-  let expected_prints = run_real_lua lua_code in
+  let expected_prints = run_real_lua lua_code_for_real_lua in
   assert_string_list_equal actual_prints expected_prints
 
 let test_branch_prints filename =

@@ -9,6 +9,6 @@ function f(x)
 end
 
 f(true)
-print(y)
+__print(y)
 f(false)
-print(y)
+__print(y)

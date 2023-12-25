@@ -15,6 +15,12 @@ let print_to_string arg =
   | VNil -> "nil"
   | _ -> failwith "Wrong args"
 
+let builtin_print : builtin_fun =
+ fun state args ->
+  let arg = match args with [ v ] -> v | _ -> failwith "Wrong args" in
+  let state = { state with prints = print_to_string arg :: state.prints } in
+  (state, VNil)
+
 let builtin_debug : builtin_fun =
  fun state args ->
   Printf.printf "debug: %s\n%!"
@@ -25,23 +31,11 @@ let builtin_debug : builtin_fun =
 let level_1_builtins =
   [
     ("__new_unknown_boolean", builtin_new_unknown_boolean);
+    ("__print", builtin_print);
     ("__debug", builtin_debug);
   ]
 
 (* Level 2 *)
-
-let builtin_print : builtin_fun =
- fun state args ->
-  let arg =
-    match args with
-    | [ v ] | [ v; _ ] | [ v; _; _ ] | [ v; _; _; _ ] -> v
-    | _ ->
-        failwith
-          "Wrong number of args (print is defined with 1-4 args, but only the \
-           first is the string, like Pico 8 print)"
-  in
-  let state = { state with prints = print_to_string arg :: state.prints } in
-  (state, VNil)
 
 let builtin_error : builtin_fun =
  (* Unlike real Lua this doesn't actually throw Lua-level exceptions, but it still
@@ -52,7 +46,7 @@ let builtin_error : builtin_fun =
   | [ VString s ] -> failwith @@ Printf.sprintf "error called: %s" s
   | _ -> failwith "Wrong args"
 
-let level_2_builtins = [ ("print", builtin_print); ("error", builtin_error) ]
+let level_2_builtins = [ ("error", builtin_error) ]
 
 (* Level 5 *)
 

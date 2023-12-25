@@ -14,11 +14,11 @@ end
 -- HACK This is not a pico8 function, but it's convenient to put it here
 function __assert(cond, msg)
   if not cond then
-    print("Assertion failed")
+    __print("Assertion failed")
     if msg == nil then
       error()
     else
-      print(msg)
+      __print(msg)
       error(msg)
     end
   end

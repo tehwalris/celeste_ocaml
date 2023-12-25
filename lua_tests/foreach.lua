@@ -61,7 +61,7 @@ function test_foreach_with_addition()
 end
 
 
-foreach(make_example_table(), print)
+foreach(make_example_table(), __print)
 test_normal_foreach()
 test_foreach_with_modification()
 test_foreach_with_addition()

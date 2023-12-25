@@ -1,10 +1,10 @@
 function f(a, b)
-  print(a)
-  print(b)
+  __print(a)
+  __print(b)
 end
 
 function g(v)
-  print(v)
+  __print(v)
   return v
 end
 

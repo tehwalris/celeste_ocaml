@@ -1,13 +1,13 @@
 function f(v)
   if v then
-    print("a")
+    __print("a")
   else
-    print("b")
+    __print("b")
   end
   if v then
-    print("c")
+    __print("c")
   else
-    print("d")
+    __print("d")
   end
 end
 

@@ -25,6 +25,7 @@ end
 
 -- Noop functions
 
+function print() end
 function music() end
 function sfx() end
 function pal() end

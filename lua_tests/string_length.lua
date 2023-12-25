@@ -1,7 +1,7 @@
-print(#"")
-print(#" ")
-print(#"walrus")
+__print(#"")
+__print(#" ")
+__print(#"walrus")
 s = "walrus"
-print(#s)
+__print(#s)
 x = {y="walrus"}
-print(#x.y)
+__print(#x.y)

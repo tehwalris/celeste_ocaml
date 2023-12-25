@@ -1,1 +1,1 @@
-print("walrus")
+__print("walrus")

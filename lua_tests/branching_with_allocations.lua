@@ -9,5 +9,5 @@ else
   x = {}
   x[1] = "a"
 end
-print(x[1])
-print(y[1])
+__print(x[1])
+__print(y[1])
