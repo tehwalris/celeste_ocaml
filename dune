@@ -13,6 +13,7 @@
   ir
   liveness
   lua_tests
+  perf
   pico_number
   remove_dead_instructions)
  (libraries bigarray lua_parser.lib batteries tqdm ocamlgraph ocaml-lua re)

@@ -1,3 +1,6 @@
+let incr_mut r = r := !r + 1
+let add_to_mut r v = r := !r + v
+
 type heap_id = int [@@deriving show]
 
 let gen_heap_id : unit -> heap_id =
@@ -152,6 +155,7 @@ let map_heap_value_references f v : heap_value =
   | HBuiltinFun name -> HBuiltinFun name
 
 let gc_heap (state : state) : state =
+  incr_mut Perf.global_counters.gc;
   let old_heap = state.heap in
   let new_heap = ref HeapIdMap.empty in
   let new_ids_by_old_ids = ref HeapIdMap.empty in
@@ -184,6 +188,7 @@ let gc_heap (state : state) : state =
   { state with heap = !new_heap }
 
 let normalize_state state =
+  incr_mut Perf.global_counters.normalize_state;
   (* The = operator for maps considers the internal tree structure, not just the
      contained values like Map.equal. This normalize function makes = work
      correctly for our state by rebuilding all maps so that their internal tree
@@ -251,6 +256,11 @@ let interpret_binary_op (l : value) (op : string) (r : value) : value =
 let rec interpret_non_phi_instruction (fixed_env : fixed_env)
     (states : state list) (insn : Ir.instruction) :
     (state * value) list * Ir.label option =
+  incr_mut Perf.global_counters.interpret_non_phi_instruction;
+  if
+    !(Perf.global_counters.enable_printing)
+    && !(Perf.global_counters.interpret_non_phi_instruction) mod 1000 = 0
+  then Perf.print_counters ();
   let handle_separately_no_phi (f : state -> state * value) :
       (state * value) list * Ir.label option =
     (List.map f states, None)
@@ -406,9 +416,11 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
             let fun_heap_id = heap_id_from_pointer_local state fun_local_id in
             match HeapIdMap.find fun_heap_id state.heap with
             | HBuiltinFun name ->
+                incr_mut Perf.global_counters.builtin_call;
                 let builtin_fun = List.assoc name fixed_env.builtin_funs in
                 [ builtin_fun state arg_values ]
             | HClosure (fun_global_id, captured_values) ->
+                incr_mut Perf.global_counters.closure_call;
                 let fun_def =
                   List.find
                     (fun def -> def.Ir.name = fun_global_id)
@@ -639,12 +651,18 @@ and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
         type data = StateAndMaybeReturnSet.t option
 
         let empty = None
-        let join = Flow.lift_join StateAndMaybeReturnSet.union
+
+        let join =
+          let inner = Flow.lift_join StateAndMaybeReturnSet.union in
+          fun a b ->
+            incr_mut Perf.global_counters.flow_join;
+            inner a b
 
         let accumulate (accumulated : StateAndMaybeReturnSet.t option)
             (potentially_new : StateAndMaybeReturnSet.t option) :
             StateAndMaybeReturnSet.t option
             * StateAndMaybeReturnSet.t option option =
+          incr_mut Perf.global_counters.flow_accumulate;
           let is_empty = function
             | Some (StateAndMaybeReturnSet.StateSet states) ->
                 StateSet.is_empty states
@@ -655,7 +673,8 @@ and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
           if is_empty potentially_new then (accumulated, None)
           else if is_empty accumulated then
             (potentially_new, Some potentially_new)
-          else
+          else (
+            incr_mut Perf.global_counters.flow_accumulate_diff;
             let actually_new =
               Some
                 (StateAndMaybeReturnSet.diff
@@ -663,20 +682,26 @@ and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
                    (Option.get accumulated))
             in
             ( join accumulated actually_new,
-              if is_empty actually_new then None else Some actually_new )
+              if is_empty actually_new then None else Some actually_new ))
 
         let analyze =
-          Block_flow.make_flow_function
-            (fun source_block_name target_block ->
-              lift_no_return @@ flow_block_phi source_block_name target_block)
-            (fun target_block ->
-              lift_no_return
-              @@ flow_block_before_join live_variable_analysis target_block)
-            (fun block -> lift_no_return @@ flow_block_post_phi fixed_env block)
-            (fun terminator flow_target ->
-              lift_no_return @@ flow_branch terminator flow_target)
-            (fun terminator -> lift_return_out_only @@ flow_return terminator)
-            cfg
+          let inner =
+            Block_flow.make_flow_function
+              (fun source_block_name target_block ->
+                lift_no_return @@ flow_block_phi source_block_name target_block)
+              (fun target_block ->
+                lift_no_return
+                @@ flow_block_before_join live_variable_analysis target_block)
+              (fun block ->
+                lift_no_return @@ flow_block_post_phi fixed_env block)
+              (fun terminator flow_target ->
+                lift_no_return @@ flow_branch terminator flow_target)
+              (fun terminator -> lift_return_out_only @@ flow_return terminator)
+              cfg
+          in
+          fun edge data ->
+            incr_mut Perf.global_counters.flow_analyze;
+            inner edge data
 
         let show_data = function
           | Some (StateAndMaybeReturnSet.StateSet states) ->
@@ -690,11 +715,14 @@ and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
       end)
   in
   let g = Block_flow.flow_graph_of_cfg cfg in
+  add_to_mut Perf.global_counters.fixpoint_created_node
+  @@ Block_flow.G.nb_vertex g;
   let init v =
     if Block_flow.G.in_degree g v = 0 then
       Some (StateAndMaybeReturnSet.StateSet states)
     else None
   in
+  incr_mut Perf.global_counters.fixpoint_started;
   Option.get @@ CfgFixpoint.analyze false init g Block_flow.Return
 
 let init (fun_defs : Ir.fun_def list) (builtins : (string * builtin_fun) list) :

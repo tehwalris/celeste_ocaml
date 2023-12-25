@@ -5,6 +5,8 @@ _init()
 |}
 
 let () =
+  Perf.global_counters.enable_printing := true;
+
   let lua_code =
     BatFile.with_file_in "celeste-standard-syntax.lua" BatIO.read_all
   in
