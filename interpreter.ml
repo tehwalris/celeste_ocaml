@@ -118,11 +118,46 @@ module StateAndMaybeReturnSet = struct
         StateAndReturnSet (StateAndReturnSet.diff a b)
     | _ -> failwith "Cannot diff StateSet and StateAndReturnSet"
 
+  let state_set_union_diff (a : StateSet.t) (b : StateSet.t) :
+      StateSet.t * StateSet.t =
+    StateSet.fold
+      (fun v (union, diff) ->
+        let new_union = StateSet.add v union in
+        if new_union == union then (union, diff)
+        else (new_union, StateSet.add v diff))
+      a (b, StateSet.empty)
+
+  let state_and_return_set_union_diff (a : StateAndReturnSet.t)
+      (b : StateAndReturnSet.t) : StateAndReturnSet.t * StateAndReturnSet.t =
+    StateAndReturnSet.fold
+      (fun v (union, diff) ->
+        let new_union = StateAndReturnSet.add v union in
+        if new_union == union then (union, diff)
+        else (new_union, StateAndReturnSet.add v diff))
+      a
+      (b, StateAndReturnSet.empty)
+
+  (* union_diff a b = (union a b, diff a b) (only when = is Set.equal though)*)
+  let union_diff (a : t) (b : t) : t * t =
+    match (a, b) with
+    | StateSet a, StateSet b ->
+        let union, diff = state_set_union_diff a b in
+        (StateSet union, StateSet diff)
+    | StateAndReturnSet a, StateAndReturnSet b ->
+        let union, diff = state_and_return_set_union_diff a b in
+        (StateAndReturnSet union, StateAndReturnSet diff)
+    | _ -> failwith "Cannot union_diff StateSet and StateAndReturnSet"
+
   let equal (a : t) (b : t) : bool =
     match (a, b) with
     | StateSet a, StateSet b -> StateSet.equal a b
     | StateAndReturnSet a, StateAndReturnSet b -> StateAndReturnSet.equal a b
     | _ -> false
+
+  let is_empty (a : t) : bool =
+    match a with
+    | StateSet a -> StateSet.is_empty a
+    | StateAndReturnSet a -> StateAndReturnSet.is_empty a
 end
 
 let analyze_live_variables cfg =
@@ -666,12 +701,11 @@ and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
         type data = StateAndMaybeReturnSet.t option
 
         let empty = None
+        let untimed_join = Flow.lift_join StateAndMaybeReturnSet.union
 
-        let join =
-          let inner = Flow.lift_join StateAndMaybeReturnSet.union in
-          fun a b ->
-            Perf.count_and_time Perf.global_counters.flow_join @@ fun () ->
-            inner a b
+        let join a b =
+          Perf.count_and_time Perf.global_counters.flow_join @@ fun () ->
+          untimed_join a b
 
         let accumulate (accumulated : StateAndMaybeReturnSet.t option)
             (potentially_new : StateAndMaybeReturnSet.t option) :
@@ -688,16 +722,15 @@ and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
           if is_empty potentially_new then (accumulated, None)
           else if is_empty accumulated then
             (potentially_new, Some potentially_new)
-          else (
-            incr_mut Perf.global_counters.flow_accumulate_diff;
-            let actually_new =
-              Some
-                (StateAndMaybeReturnSet.diff
-                   (Option.get potentially_new)
-                   (Option.get accumulated))
+          else
+            let join_result, actually_new =
+              StateAndMaybeReturnSet.union_diff
+                (Option.get potentially_new)
+                (Option.get accumulated)
             in
-            ( join accumulated actually_new,
-              if is_empty actually_new then None else Some actually_new ))
+            ( Some join_result,
+              if StateAndMaybeReturnSet.is_empty actually_new then None
+              else Some (Some actually_new) )
 
         let analyze =
           let inner =

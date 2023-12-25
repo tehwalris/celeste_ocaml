@@ -1,6 +1,7 @@
 type timer = Mtime_clock.counter
 
-let pp_timer (f : Format.formatter) (timer : timer) = Format.fprintf f "(timer)"
+let pp_timer (f : Format.formatter) (_timer : timer) =
+  Format.fprintf f "(timer)"
 
 type timed_counter = {
   start_count : int;
@@ -32,7 +33,6 @@ type counters = {
   normalize_state : int ref;
   flow_join : timed_counter ref;
   flow_accumulate : timed_counter ref;
-  flow_accumulate_diff : int ref;
   flow_analyze : timed_counter ref;
   fixpoint : timed_counter ref;
   fixpoint_created_node : int ref;
@@ -50,7 +50,6 @@ let global_counters : counters =
     normalize_state = ref 0;
     flow_join = ref empty_timed_counter;
     flow_accumulate = ref empty_timed_counter;
-    flow_accumulate_diff = ref 0;
     flow_analyze = ref empty_timed_counter;
     fixpoint = ref empty_timed_counter;
     fixpoint_created_node = ref 0;
@@ -88,8 +87,6 @@ let print_counters () =
   @@ show_timed_counter !(global_counters.flow_join);
   Printf.printf "  flow_accumulate: %s\n"
   @@ show_timed_counter !(global_counters.flow_accumulate);
-  Printf.printf "  flow_accumulate_diff: %d\n"
-    !(global_counters.flow_accumulate_diff);
   Printf.printf "  flow_analyze: %s\n"
   @@ show_timed_counter !(global_counters.flow_analyze);
   Printf.printf "  fixpoint %s\n"
