@@ -1,9 +1,11 @@
 - [x] test state combination with irrelevant locals
 - [x] test state combination with gc differences
-- [ ] make \_init fast enough (~1s)
-  - [ ] run and optimize microbenchmarks like "foreach"
-- [ ] run one "frame" of the game
-  - [ ] write the standard library to support this
+- [x] make \_init fast enough (~1s)
+  - [x] run and optimize microbenchmarks like "foreach"
+- [x] run one "frame" of the game
+  - [x] write the standard library to support this
+- [ ] support reading uninitialized globals and fields
+- [ ] run the game past the tile screen
 - [ ] step-by-step graph exploration (using some kind of "origin state index" in states)
   - [ ] run this and have it be really slow
 - [ ] vectorize on cpu
