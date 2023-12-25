@@ -155,8 +155,7 @@ let map_heap_value_references f v : heap_value =
   | HBuiltinFun name -> HBuiltinFun name
 
 let gc_heap (state : state) : state =
-  Perf.count_and_time Perf.global_counters.gc Perf.global_counters.gc_total_time
-  @@ fun () ->
+  Perf.count_and_time Perf.global_counters.gc @@ fun () ->
   let old_heap = state.heap in
   let new_heap = ref HeapIdMap.empty in
   let new_ids_by_old_ids = ref HeapIdMap.empty in
@@ -701,9 +700,8 @@ and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
               cfg
           in
           fun edge data ->
-            Perf.count_and_time Perf.global_counters.flow_analyze
-              Perf.global_counters.flow_analyze_total_time
-            @@ fun () -> inner edge data
+            Perf.count_and_time Perf.global_counters.flow_analyze @@ fun () ->
+            inner edge data
 
         let show_data = function
           | Some (StateAndMaybeReturnSet.StateSet states) ->
@@ -724,8 +722,7 @@ and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
       Some (StateAndMaybeReturnSet.StateSet states)
     else None
   in
-  incr_mut Perf.global_counters.fixpoint_started;
-  Perf.time Perf.global_counters.debug_total_time @@ fun () ->
+  Perf.count_and_time Perf.global_counters.fixpoint @@ fun () ->
   Option.get @@ CfgFixpoint.analyze false init g Block_flow.Return
 
 let init (fun_defs : Ir.fun_def list) (builtins : (string * builtin_fun) list) :
