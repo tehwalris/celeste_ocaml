@@ -229,12 +229,16 @@ module LazyStateSet = struct
       else NonNormalizedList ab_list
 
   let union_diff (a : t) (b : t) : t * t =
-    (* TODO lazy *)
-    let a = to_normalized_state_set a in
     let b = to_normalized_state_set b in
-    let union = StateSet.union a b in
-    let diff = StateSet.diff union b in
-    (NormalizedSet union, NormalizedSet diff)
+    let union, diff =
+      Seq.fold_left
+        (fun (union, diff) v ->
+          let new_union = StateSet.add v union in
+          if new_union == union then (union, diff) else (new_union, v :: diff))
+        (b, [])
+        (to_normalized_non_deduped_seq a)
+    in
+    (NormalizedSet union, NormalizedList diff)
 
   let map (f : state -> state) (t : t) : t =
     NonNormalizedList
