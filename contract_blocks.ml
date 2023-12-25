@@ -38,7 +38,7 @@ let rec contract_blocks (cfg : cfg) : cfg =
       let block_b = List.assoc name_b cfg.named in
       let block_b_phi, _ = split_block_phi_instructions block_b in
       assert (block_b_phi = []);
-      let new_block_b =
+      let new_block_a =
         {
           block_b with
           instructions =
@@ -51,29 +51,28 @@ let rec contract_blocks (cfg : cfg) : cfg =
           named =
             List.filter_map
               (fun (name, block) ->
-                if name = name_a then None
-                else if name = name_b then Some (name, new_block_b)
+                if name = name_a then Some (name, new_block_a)
+                else if name = name_b then None
                 else Some (name, block))
               cfg.named;
         }
-      in
-      let adjust_branch_target name = if name = name_a then name_b else name in
-      let cfg =
-        cfg_map_blocks
-          (fun block ->
-            let terminator =
-              match block.terminator with
-              | id, Br target_name -> (id, Br (adjust_branch_target target_name))
-              | id, Cbr (value, true_name, false_name) ->
-                  ( id,
-                    Cbr
-                      ( value,
-                        adjust_branch_target true_name,
-                        adjust_branch_target false_name ) )
-              | terminator -> terminator
-            in
-            { block with terminator })
-          cfg
+        |> cfg_map_blocks (fun block ->
+               {
+                 block with
+                 instructions =
+                   List.map
+                     (function
+                       | insn_id, Phi l ->
+                           ( insn_id,
+                             Phi
+                               (List.map
+                                  (fun (name, v) ->
+                                    if name = name_b then (name_a, v)
+                                    else (name, v))
+                                  l) )
+                       | instr -> instr)
+                     block.instructions;
+               })
       in
       contract_blocks cfg
   | None -> cfg
