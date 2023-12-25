@@ -235,11 +235,11 @@ let gc_heap (state : state) : state =
   { state with heap = !new_heap }
 
 let normalize_state state =
-  incr_mut Perf.global_counters.normalize_state;
   (* The = operator for maps considers the internal tree structure, not just the
      contained values like Map.equal. This normalize function makes = work
      correctly for our state by rebuilding all maps so that their internal tree
      structure is identical if their values are identical. *)
+  Perf.count_and_time Perf.global_counters.normalize_state @@ fun () ->
   {
     state with
     global_env = state.global_env |> StringMap.to_seq |> StringMap.of_seq;
@@ -765,6 +765,8 @@ and interpret_cfg (fixed_env : fixed_env) (states : StateSet.t) (cfg : Ir.cfg) :
   let g = Block_flow.flow_graph_of_cfg cfg in
   add_to_mut Perf.global_counters.fixpoint_created_node
   @@ Block_flow.G.nb_vertex g;
+  add_to_mut Perf.global_counters.fixpoint_created_edge
+  @@ Block_flow.G.nb_edges g;
   let init v =
     if Block_flow.G.in_degree g v = 0 then
       Some (StateAndMaybeReturnSet.StateSet states)

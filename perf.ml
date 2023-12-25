@@ -30,12 +30,13 @@ type counters = {
   builtin_call : int ref;
   closure_call : int ref;
   gc : timed_counter ref;
-  normalize_state : int ref;
+  normalize_state : timed_counter ref;
   flow_join : timed_counter ref;
   flow_accumulate : timed_counter ref;
   flow_analyze : timed_counter ref;
   fixpoint : timed_counter ref;
   fixpoint_created_node : int ref;
+  fixpoint_created_edge : int ref;
 }
 [@@deriving show]
 
@@ -47,12 +48,13 @@ let global_counters : counters =
     builtin_call = ref 0;
     closure_call = ref 0;
     gc = ref empty_timed_counter;
-    normalize_state = ref 0;
+    normalize_state = ref empty_timed_counter;
     flow_join = ref empty_timed_counter;
     flow_accumulate = ref empty_timed_counter;
     flow_analyze = ref empty_timed_counter;
     fixpoint = ref empty_timed_counter;
     fixpoint_created_node = ref 0;
+    fixpoint_created_edge = ref 0;
   }
 
 let usecs_of_span span =
@@ -82,7 +84,8 @@ let print_counters () =
   Printf.printf "  builtin_call: %d\n" !(global_counters.builtin_call);
   Printf.printf "  closure_call: %d\n" !(global_counters.closure_call);
   Printf.printf "  gc: %s\n" @@ show_timed_counter !(global_counters.gc);
-  Printf.printf "  normalize_state: %d\n" !(global_counters.normalize_state);
+  Printf.printf "  normalize_state: %s\n"
+  @@ show_timed_counter !(global_counters.normalize_state);
   Printf.printf "  flow_join: %s\n"
   @@ show_timed_counter !(global_counters.flow_join);
   Printf.printf "  flow_accumulate: %s\n"
@@ -93,6 +96,8 @@ let print_counters () =
   @@ show_timed_counter !(global_counters.fixpoint);
   Printf.printf "  fixpoint_created_node: %d\n"
     !(global_counters.fixpoint_created_node);
+  Printf.printf "  fixpoint_created_edge: %d\n"
+    !(global_counters.fixpoint_created_edge);
   Printf.printf "\n%!"
 
 let count_and_time (c : timed_counter ref) f =
