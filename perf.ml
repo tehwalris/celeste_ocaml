@@ -106,7 +106,23 @@ let print_counters () =
     !(global_counters.fixpoint_created_edge);
   Printf.printf "  fixpoint_prepare: %s\n"
   @@ show_timed_counter !(global_counters.fixpoint_prepare);
-  Printf.printf "\n%!"
+  Printf.printf "%!"
+
+let reset_counters () =
+  global_counters.reset_at := Mtime_clock.counter ();
+  global_counters.interpret_non_phi_instruction := 0;
+  global_counters.handle_separately_no_phi := empty_timed_counter;
+  global_counters.builtin_call := 0;
+  global_counters.closure_call := 0;
+  global_counters.gc := empty_timed_counter;
+  global_counters.normalize_state_maps_except_heap := empty_timed_counter;
+  global_counters.flow_join := empty_timed_counter;
+  global_counters.flow_accumulate := empty_timed_counter;
+  global_counters.flow_analyze := empty_timed_counter;
+  global_counters.fixpoint := empty_timed_counter;
+  global_counters.fixpoint_created_node := 0;
+  global_counters.fixpoint_created_edge := 0;
+  global_counters.fixpoint_prepare := empty_timed_counter
 
 let count_and_time (c : timed_counter ref) f =
   let is_top_level = Option.is_none !c.top_level_timer in
