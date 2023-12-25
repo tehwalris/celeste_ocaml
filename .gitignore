@@ -2,6 +2,7 @@ _build
 /_opam
 /profile.txt
 /perf.data
+/perf.data.old
 /output.txt
 /a.txt
 /b.txt
