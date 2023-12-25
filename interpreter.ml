@@ -531,6 +531,8 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
             | None ->
                 if not create_if_missing then
                   failwith "Index not found, but create_if_missing was false";
+                if index <> ListForArrayTable.length old_fields + 1 then
+                  failwith "Index is not the next index in the array";
                 let state, field_heap_id = state_heap_add state (HValue VNil) in
                 let state =
                   state_heap_update state
