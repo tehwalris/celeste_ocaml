@@ -1131,7 +1131,6 @@ function load_room(x,y)
 	for tx=0,15 do
 		__debug("tx", tx)
 		for ty=0,15 do
-			__debug("tx", tx, "ty", ty)
 			local tile = mget(room.x*16+tx,room.y*16+ty);
 			if tile==11 then
 				init_object(platform,tx*8,ty*8).dir=-1

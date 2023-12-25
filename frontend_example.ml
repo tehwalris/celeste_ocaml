@@ -1,7 +1,11 @@
 open Compiler_lib
 
-let suffix_code = String.trim {|
+let suffix_code =
+  String.trim
+    {|
+-- TODO double check that the order is: init, update, draw, update, draw, ...
 _init()
+_update()
 |}
 
 let () =
