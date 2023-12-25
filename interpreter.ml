@@ -671,17 +671,13 @@ and flow_block_before_join
   in
   LazyStateSet.map
     (fun state ->
-      let state =
-        {
-          state with
-          local_env =
-            Ir.LocalIdMap.filter
-              (fun local_id _ -> Ir.LocalIdSet.mem local_id live_variables)
-              state.local_env;
-        }
-      in
-      (* TODO don't normalize here *)
-      state |> normalize_state)
+      {
+        state with
+        local_env =
+          Ir.LocalIdMap.filter
+            (fun local_id _ -> Ir.LocalIdSet.mem local_id live_variables)
+            state.local_env;
+      })
     states
 
 and flow_block_post_phi (fixed_env : fixed_env) (block : Ir.block)
@@ -734,7 +730,6 @@ and flow_return (terminator : Ir.terminator) (states : LazyStateSet.t) :
             @@ Ir.LocalIdMap.find local_id state.local_env
         | None -> Ir.LocalIdMap.empty);
     }
-    |> normalize_state (* TODO don't normalize here *)
   in
   match terminator with
   | Ir.Ret (Some local_id) ->
