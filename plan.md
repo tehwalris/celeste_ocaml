@@ -1,5 +1,7 @@
 - [x] test state combination with irrelevant locals
 - [x] test state combination with gc differences
+- [ ] make \_init fast enough (~1s)
+  - [ ] run and optimize microbenchmarks like "foreach"
 - [ ] run one "frame" of the game
   - [ ] write the standard library to support this
 - [ ] step-by-step graph exploration (using some kind of "origin state index" in states)
