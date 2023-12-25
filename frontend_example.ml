@@ -1,13 +1,13 @@
 open Compiler_lib
 
 let suffix_code = String.trim {|
-_init()
+-- _init()
 |}
 
 let () =
   (* Perf.global_counters.enable_printing := true; *)
   let lua_code =
-    BatFile.with_file_in "celeste-standard-syntax.lua" BatIO.read_all
+    BatFile.with_file_in "benchmarks/for_mini.lua" BatIO.read_all
   in
   let ast =
     Lua_parser.Parse.parse_from_string

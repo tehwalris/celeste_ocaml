@@ -163,6 +163,7 @@ let normalize_state_maps_except_heap (state : state) : state =
   }
 
 let normalize_state (state : state) : state =
+  Printf.printf "normalize_state\n";
   state |> normalize_state_maps_except_heap |> gc_heap
 
 module StateSet = Set.Make (struct
@@ -215,6 +216,7 @@ module LazyStateSet = struct
   let normalize (t : t) : t = NormalizedSet (to_normalized_state_set t)
 
   let union (a : t) (b : t) : t =
+    Printf.printf "union\n";
     if is_empty a then b
     else if is_empty b then a
     else
@@ -229,7 +231,9 @@ module LazyStateSet = struct
       else NonNormalizedList ab_list
 
   let union_diff (a : t) (b : t) : t * t =
+    Printf.printf "union diff b\n";
     let b = to_normalized_state_set b in
+    Printf.printf "union diff rest\n";
     let union, diff =
       Seq.fold_left
         (fun (union, diff) v ->
@@ -384,6 +388,10 @@ let interpret_binary_op (l : value) (op : string) (r : value) : value =
       failwith
       @@ Printf.sprintf "Unsupported binary op: %s %s %s" (show_value l) op
            (show_value r)
+
+let debug_states (states : LazyStateSet.t) : string =
+  if LazyStateSet.has_normalized_elements states then "normalized"
+  else "not normalized"
 
 let rec interpret_non_phi_instruction (fixed_env : fixed_env)
     (states : state list) (insn : Ir.instruction) :
@@ -653,6 +661,7 @@ and interpret_terminator (states : state list) (terminator : Ir.terminator) :
 
 and flow_block_phi (source_block_name : Ir.label) (target_block : Ir.block)
     (states : LazyStateSet.t) : LazyStateSet.t =
+  Printf.printf "before flow_block_phi (%s)\n" @@ debug_states states;
   let phi_instructions, _ = Ir.split_block_phi_instructions target_block in
   LazyStateSet.map
     (fun state ->
@@ -674,6 +683,7 @@ and flow_block_before_join
     (live_variable_analysis :
       Flow.flow_side * Ir.local_id -> Ir.LocalIdSet.t option)
     (target_block : Ir.block) (states : LazyStateSet.t) : LazyStateSet.t =
+  Printf.printf "before flow_block_before_join (%s)\n" @@ debug_states states;
   let terminator_local_id, _ = target_block.terminator in
   let first_non_phi_local_id =
     target_block.instructions
@@ -685,16 +695,20 @@ and flow_block_before_join
   let live_variables =
     Option.get @@ live_variable_analysis (Flow.Before, first_non_phi_local_id)
   in
-  LazyStateSet.map
-    (fun state ->
-      let new_local_env =
+  let states =
+    LazyStateSet.map
+      (fun state ->
+        let new_local_env =
           Ir.LocalIdMap.filter
             (fun local_id _ -> Ir.LocalIdSet.mem local_id live_variables)
-          state.local_env
-      in
-      if new_local_env == state.local_env then state
-      else { state with local_env = new_local_env })
-    states
+            state.local_env
+        in
+        if new_local_env == state.local_env then state
+        else { state with local_env = new_local_env })
+      states
+  in
+  Printf.printf "after flow_block_before_join (%s)\n" @@ debug_states states;
+  states
 
 and flow_block_post_phi (fixed_env : fixed_env) (block : Ir.block)
     (states : LazyStateSet.t) : LazyStateSet.t =
@@ -720,6 +734,7 @@ and flow_block_post_phi (fixed_env : fixed_env) (block : Ir.block)
 
 and flow_branch (terminator : Ir.terminator) (flow_target : Ir.label)
     (states : LazyStateSet.t) : LazyStateSet.t =
+  Printf.printf "before flow_branch (%s)\n" @@ debug_states states;
   match terminator with
   | Ir.Br terminator_target when terminator_target = flow_target -> states
   | Ir.Cbr (local_id, true_label, false_label)
