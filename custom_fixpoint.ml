@@ -123,8 +123,8 @@ struct
          as necessary *)
       let analyze_node analysis n m_data_acc m_data_new wl =
         match analysis m_data_acc m_data_new n with
-        | m_data_acc, m_data_new, false -> (m_data_acc, m_data_new, wl)
-        | m_data_acc, m_data_new, true ->
+        | None -> (m_data_acc, m_data_new, wl)
+        | Some (m_data_acc, m_data_new) ->
             ( m_data_acc,
               m_data_new,
               let _, i = M.find n nodemap in
@@ -177,18 +177,16 @@ struct
                   (match actually_new with
                   | Some d -> Printf.sprintf "Some(%s)" @@ A.show_data d
                   | None -> "None");
-              let m_data_acc = M.add node data_acc' m_data_acc in
-              let m_data_new : A.data M.t M.t =
-                match actually_new with
-                | Some d ->
-                    M.add node
-                      (M.map
-                         (fun old_d -> A.join d old_d)
-                         (M.find node m_data_new))
-                      m_data_new
-                | None -> m_data_new
-              in
-              (m_data_acc, m_data_new, Option.is_some actually_new)
+              match actually_new with
+              | Some d ->
+                  Some
+                    ( M.add node data_acc' m_data_acc,
+                      M.add node
+                        (M.map
+                           (fun old_d -> A.join d old_d)
+                           (M.find node m_data_new))
+                        m_data_new )
+              | None -> None
             in
 
             (new_node_data, G.succ g n)
