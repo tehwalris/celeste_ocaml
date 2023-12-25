@@ -661,10 +661,9 @@ and interpret_terminator (states : state list) (terminator : Ir.terminator) :
            (fun state ->
              let labels =
                match Ir.LocalIdMap.find local_id state.local_env with
-               | VBool true -> [ true_label ]
-               | VBool false -> [ false_label ]
+               | VBool false | VNil -> [ false_label ]
                | VUnknownBool -> [ true_label; false_label ]
-               | _ -> failwith "Cbr called on non-boolean value"
+               | _ -> [ true_label ]
              in
              List.map (fun label -> (label, state)) labels)
            states)
@@ -756,10 +755,9 @@ and flow_branch (terminator : Ir.terminator) (flow_target : Ir.label)
       LazyStateSet.filter
         (fun state ->
           match Ir.LocalIdMap.find local_id state.local_env with
-          | VBool v when v = (flow_target = true_label) -> true
-          | VBool _ -> false
+          | VBool false | VNil -> flow_target = false_label
           | VUnknownBool -> true
-          | _ -> failwith "Cbr called on non-boolean value")
+          | _ -> flow_target = true_label)
         states
   | _ -> failwith "Unexpected flow"
 
