@@ -241,13 +241,27 @@ module LazyStateSet = struct
     (NormalizedSet union, NormalizedList diff)
 
   let map (f : state -> state) (t : t) : t =
-    NonNormalizedList
-      (t |> to_non_normalized_non_deduped_seq |> Seq.map f |> List.of_seq)
+    let changed = ref false in
+    let new_list =
+      t |> to_non_normalized_non_deduped_seq
+      |> Seq.map (fun state ->
+             let new_state = f state in
+             if new_state != state then changed := true;
+             new_state)
+      |> List.of_seq
+    in
+    if !changed then NonNormalizedList new_list else t
 
   let filter (f : state -> bool) = function
     | NormalizedSet set -> NormalizedSet (StateSet.filter f set)
     | NormalizedList list -> NormalizedList (List.filter f list)
     | NonNormalizedList list -> NonNormalizedList (List.filter f list)
+
+  let cardinal_upper_bound (t : t) : int =
+    match t with
+    | NormalizedSet set -> StateSet.cardinal set
+    | NormalizedList list -> List.length list
+    | NonNormalizedList list -> List.length list
 end
 
 module StateAndReturnSet = Set.Make (struct
@@ -673,13 +687,13 @@ and flow_block_before_join
   in
   LazyStateSet.map
     (fun state ->
-      {
-        state with
-        local_env =
+      let new_local_env =
           Ir.LocalIdMap.filter
             (fun local_id _ -> Ir.LocalIdSet.mem local_id live_variables)
-            state.local_env;
-      })
+          state.local_env
+      in
+      if new_local_env == state.local_env then state
+      else { state with local_env = new_local_env })
     states
 
 and flow_block_post_phi (fixed_env : fixed_env) (block : Ir.block)
@@ -821,11 +835,10 @@ and interpret_cfg (fixed_env : fixed_env) (states : LazyStateSet.t)
         let show_data = function
           | Some (StateAndMaybeReturnSet.StateSet states) ->
               Printf.sprintf "Some(StateSet %d)"
-                (states |> LazyStateSet.to_normalized_state_set
-               |> StateSet.cardinal)
+              @@ LazyStateSet.cardinal_upper_bound states
           | Some (StateAndMaybeReturnSet.StateAndReturnSet states) ->
               Printf.sprintf "Some(StateAndReturnSet %d)"
-                (StateAndReturnSet.cardinal states)
+              @@ StateAndReturnSet.cardinal states
           | None -> "None"
 
         let show_vertex = Block_flow.show_flow_node
@@ -842,7 +855,7 @@ and interpret_cfg (fixed_env : fixed_env) (states : LazyStateSet.t)
     else None
   in
   Perf.count_and_time Perf.global_counters.fixpoint @@ fun () ->
-  Option.get @@ CfgFixpoint.analyze false init g Block_flow.Return
+  Option.get @@ CfgFixpoint.analyze true init g Block_flow.Return
 
 let init (fun_defs : Ir.fun_def list) (builtins : (string * builtin_fun) list) :
     fixed_env * state =
