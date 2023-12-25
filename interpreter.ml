@@ -204,20 +204,8 @@ module LazyStateSet = struct
     match t with
     | NormalizedSet _ -> true
     | NormalizedList _ -> true
+    | NonNormalizedList [] -> true
     | NonNormalizedList _ -> false
-
-  let rec true_union (a : t) (b : t) : t =
-    match (a, b) with
-    | NormalizedSet a, NormalizedSet b -> NormalizedSet (StateSet.union a b)
-    | NormalizedSet a, b ->
-        NormalizedSet (StateSet.add_seq (to_normalized_non_deduped_seq b) a)
-    | a, NormalizedSet b -> true_union (NormalizedSet b) a
-    | a, b ->
-        NormalizedSet
-          (Seq.append
-             (to_normalized_non_deduped_seq a)
-             (to_normalized_non_deduped_seq b)
-          |> StateSet.of_seq)
 
   let to_normalized_state_set (t : t) : StateSet.t =
     match t with
@@ -227,8 +215,18 @@ module LazyStateSet = struct
   let normalize (t : t) : t = NormalizedSet (to_normalized_state_set t)
 
   let union (a : t) (b : t) : t =
-    (* TODO lazy *)
-    true_union a b
+    if is_empty a then b
+    else if is_empty b then a
+    else
+      let ab_list =
+        Seq.append
+          (to_non_normalized_non_deduped_seq a)
+          (to_non_normalized_non_deduped_seq b)
+        |> List.of_seq
+      in
+      if has_normalized_elements a && has_normalized_elements b then
+        NormalizedList ab_list
+      else NonNormalizedList ab_list
 
   let union_diff (a : t) (b : t) : t * t =
     (* TODO lazy *)
