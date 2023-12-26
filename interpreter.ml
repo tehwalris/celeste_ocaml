@@ -927,25 +927,21 @@ let prepare_fixpoint (cfg : Ir.cfg) (fixed_env_ref : fixed_env ref) =
 
         let accumulate (accumulated : StateAndMaybeReturnSet.t option)
             (potentially_new : StateAndMaybeReturnSet.t option) :
-            StateAndMaybeReturnSet.t option
-            * StateAndMaybeReturnSet.t option option =
+            StateAndMaybeReturnSet.t option * StateAndMaybeReturnSet.t option =
           Perf.count_and_time Perf.global_counters.flow_accumulate @@ fun () ->
           let is_empty = function
             | Some states -> StateAndMaybeReturnSet.is_empty states
             | None -> true
           in
           if is_empty potentially_new then (accumulated, None)
-          else if is_empty accumulated then
-            (potentially_new, Some potentially_new)
+          else if is_empty accumulated then (potentially_new, potentially_new)
           else
             let join_result, actually_new =
               StateAndMaybeReturnSet.union_diff
                 (Option.get potentially_new)
                 (Option.get accumulated)
             in
-            ( Some join_result,
-              if StateAndMaybeReturnSet.is_empty actually_new then None
-              else Some (Some actually_new) )
+            (Some join_result, Some actually_new)
 
         let analyze =
           let inner =

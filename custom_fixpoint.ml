@@ -41,7 +41,7 @@ module type Analysis = sig
   val join : data -> data -> data
 
   (* accumulated -> potentially_new -> accumulated * actually_new *)
-  val accumulate : data -> data -> data * data option
+  val accumulate : data -> data -> data * data
   val analyze : edge -> data -> data
   val show_data : data -> string
   val show_vertex : vertex -> string
@@ -142,7 +142,7 @@ struct
               in
               let potentially_new = meet (initial node) analysis in
               match M.find_opt node m_data_acc with
-              | Some data_acc -> (
+              | Some data_acc ->
                   let data_acc', actually_new =
                     A.accumulate data_acc potentially_new
                   in
@@ -152,16 +152,12 @@ struct
                        data_acc' = %s; actually_new = %s\n"
                       (A.show_vertex node) (A.show_data data_acc)
                       (A.show_data potentially_new)
-                      (A.show_data data_acc')
-                      (match actually_new with
-                      | Some d -> Printf.sprintf "Some(%s)" @@ A.show_data d
-                      | None -> "None");
-                  match actually_new with
-                  | Some d ->
-                      Some
-                        ( M.add node data_acc' m_data_acc,
-                          join_to_edges m_data_new d )
-                  | None -> None)
+                      (A.show_data data_acc') (A.show_data actually_new);
+                  if A.is_empty actually_new then None
+                  else
+                    Some
+                      ( M.add node data_acc' m_data_acc,
+                        join_to_edges m_data_new actually_new )
               | None ->
                   if A.is_empty potentially_new then None
                   else
