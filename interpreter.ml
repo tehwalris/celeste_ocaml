@@ -53,23 +53,27 @@ module Heap = struct
     new_values : heap_value HeapIdMap.t;
   }
 
-  type storage_location = Old | New
+  type storage_location = Old | New | NewOrOld
 
   let find_storage_location (heap_id : heap_id) (heap : t) =
     if heap_id >= Array.length heap.old_values then New
-    else if heap.old_changed.(heap_id) then New
+    else if heap.old_changed.(heap_id) then NewOrOld
     else Old
 
   let empty =
     { old_values = [||]; old_changed = [||]; new_values = HeapIdMap.empty }
 
   let find (heap_id : heap_id) (heap : t) : heap_value =
+    let find_old () = heap.old_values.(heap_id) in
+    let find_new_opt () = HeapIdMap.find_opt heap_id heap.new_values in
     match find_storage_location heap_id heap with
-    | Old -> heap.old_values.(heap_id)
-    | New -> HeapIdMap.find heap_id heap.new_values
+    | Old -> find_old ()
+    | New -> Option.get @@ find_new_opt ()
+    | NewOrOld -> (
+        match find_new_opt () with Some v -> v | None -> find_old ())
 
   let add (heap_id : heap_id) (value : heap_value) (heap : t) : t =
-    if find_storage_location heap_id heap = Old then
+    if find_storage_location heap_id heap <> New then
       heap.old_changed.(heap_id) <- true;
     { heap with new_values = HeapIdMap.add heap_id value heap.new_values }
 
