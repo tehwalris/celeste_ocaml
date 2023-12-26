@@ -55,8 +55,8 @@ let prepare_to_run_our_lua lua_code =
   let ast = Lua_parser.Parse.parse_from_string (lua_code ^ "\n") in
   let stream = Frontend.compile_top_level_ast ast in
   let cfg, fun_defs = Frontend.cfg_of_stream stream in
-  let fixed_env, state =
-    Interpreter.init fun_defs
+  let cfg, fixed_env, state =
+    Interpreter.init cfg fun_defs
     @@ List.concat [ Builtin.level_1_builtins; Builtin.level_2_builtins ]
   in
   (cfg, fixed_env, state)

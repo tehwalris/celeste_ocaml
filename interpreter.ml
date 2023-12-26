@@ -67,8 +67,14 @@ type state = {
 
 type builtin_fun = state -> value list -> state * value
 
+type prepared_cfg = {
+  cfg : Ir.cfg;
+  live_variable_analysis : Flow.G.vertex -> Ir.LocalIdSet.t option;
+  block_flow_g : Block_flow.G.t;
+}
+
 type fixed_env = {
-  fun_defs : Ir.fun_def list;
+  fun_defs : (Ir.fun_def * prepared_cfg) list;
   builtin_funs : (string * builtin_fun) list;
 }
 
@@ -351,6 +357,13 @@ let analyze_live_variables cfg =
   let g = Flow.flow_graph_of_cfg cfg in
   LiveVariableAnalysis.analyze (fun _ -> Some Ir.LocalIdSet.empty) g
 
+let prepare_cfg (cfg : Ir.cfg) : prepared_cfg =
+  {
+    cfg;
+    live_variable_analysis = analyze_live_variables cfg;
+    block_flow_g = Block_flow.flow_graph_of_cfg cfg;
+  }
+
 type terminator_result =
   (* each item corresponds to an input state *)
   | Ret of value list option
@@ -593,9 +606,9 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                 [ builtin_fun state arg_values ]
             | HClosure (fun_global_id, captured_values) ->
                 incr_mut Perf.global_counters.closure_call;
-                let fun_def =
+                let fun_def, fun_cfg =
                   List.find
-                    (fun def -> def.Ir.name = fun_global_id)
+                    (fun (fun_def, _) -> fun_def.Ir.name = fun_global_id)
                     fixed_env.fun_defs
                 in
                 let padded_arg_values =
@@ -627,7 +640,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                   try
                     interpret_cfg fixed_env
                       (LazyStateSet.of_list [ inner_state ])
-                      fun_def.cfg
+                      fun_cfg
                   with err ->
                     Printf.eprintf "Error in function %s\n" fun_global_id;
                     raise err
@@ -815,7 +828,7 @@ and flow_return (terminator : Ir.terminator) (states : LazyStateSet.t) :
   | _ -> failwith "Unexpected flow"
 
 and interpret_cfg (fixed_env : fixed_env) (states : LazyStateSet.t)
-    (cfg : Ir.cfg) : StateAndMaybeReturnSet.t =
+    (cfg : prepared_cfg) : StateAndMaybeReturnSet.t =
   let lift_no_return (f : LazyStateSet.t -> LazyStateSet.t) = function
     | StateAndMaybeReturnSet.StateSet states ->
         StateAndMaybeReturnSet.StateSet (f states)
@@ -828,7 +841,6 @@ and interpret_cfg (fixed_env : fixed_env) (states : LazyStateSet.t)
     | StateAndMaybeReturnSet.StateAndReturnSet _ ->
         failwith "Return value in unexpected part of CFG"
   in
-  let live_variable_analysis = analyze_live_variables cfg in
   let module CfgFixpoint =
     Custom_fixpoint.Make
       (Block_flow.G)
@@ -880,13 +892,14 @@ and interpret_cfg (fixed_env : fixed_env) (states : LazyStateSet.t)
                 lift_no_return @@ flow_block_phi source_block_name target_block)
               (fun target_block ->
                 lift_no_return
-                @@ flow_block_before_join live_variable_analysis target_block)
+                @@ flow_block_before_join cfg.live_variable_analysis
+                     target_block)
               (fun block ->
                 lift_no_return @@ flow_block_post_phi fixed_env block)
               (fun terminator flow_target ->
                 lift_no_return @@ flow_branch terminator flow_target)
               (fun terminator -> lift_return_out_only @@ flow_return terminator)
-              cfg
+              cfg.cfg
           in
           fun edge data ->
             Perf.count_and_time Perf.global_counters.flow_analyze @@ fun () ->
@@ -904,7 +917,7 @@ and interpret_cfg (fixed_env : fixed_env) (states : LazyStateSet.t)
         let show_vertex = Block_flow.show_flow_node
       end)
   in
-  let g = Block_flow.flow_graph_of_cfg cfg in
+  let g = cfg.block_flow_g in
   add_to_mut Perf.global_counters.fixpoint_created_node
   @@ Block_flow.G.nb_vertex g;
   add_to_mut Perf.global_counters.fixpoint_created_edge
@@ -917,8 +930,9 @@ and interpret_cfg (fixed_env : fixed_env) (states : LazyStateSet.t)
   Perf.count_and_time Perf.global_counters.fixpoint @@ fun () ->
   Option.get @@ CfgFixpoint.analyze !debug_prints init g Block_flow.Return
 
-let init (fun_defs : Ir.fun_def list) (builtins : (string * builtin_fun) list) :
-    fixed_env * state =
+let init (cfg : Ir.cfg) (fun_defs : Ir.fun_def list)
+    (builtins : (string * builtin_fun) list) : prepared_cfg * fixed_env * state
+    =
   let state =
     {
       heap = HeapIdMap.empty;
@@ -943,5 +957,13 @@ let init (fun_defs : Ir.fun_def list) (builtins : (string * builtin_fun) list) :
         })
       state builtins
   in
-  let fixed_env = { fun_defs; builtin_funs = builtins } in
-  (fixed_env, state)
+  let fixed_env =
+    {
+      fun_defs =
+        List.map
+          (fun (fun_def : Ir.fun_def) -> (fun_def, prepare_cfg fun_def.cfg))
+          fun_defs;
+      builtin_funs = builtins;
+    }
+  in
+  (prepare_cfg cfg, fixed_env, state)

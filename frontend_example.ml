@@ -60,9 +60,10 @@ let () =
   let frame_stream = Frontend.compile_top_level_ast frame_ast in
   let frame_cfg, frame_fun_defs = Frontend.cfg_of_stream frame_stream in
   assert (frame_fun_defs = []);
+  let frame_cfg = Interpreter.prepare_cfg frame_cfg in
 
-  let fixed_env, initial_state =
-    Interpreter.init fun_defs
+  let cfg, fixed_env, initial_state =
+    Interpreter.init cfg fun_defs
     @@ List.concat
          [
            Builtin.level_1_builtins;
@@ -75,7 +76,7 @@ let () =
   states := run_step fixed_env cfg !states;
   print_step !states;
   for i = 1 to 100 do
-    Printf.printf "Frame %d\n" i;
+    Printf.printf "Frame %d\n%!" i;
     states := run_step fixed_env frame_cfg !states;
     print_step !states
   done
