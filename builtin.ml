@@ -46,7 +46,20 @@ let builtin_error : builtin_fun =
   | [ VString s ] -> failwith @@ Printf.sprintf "error called: %s" s
   | _ -> failwith "Wrong args"
 
-let level_2_builtins = [ ("error", builtin_error) ]
+let builtin_min : builtin_fun =
+ fun state args ->
+  match args with
+  | [ VNumber a; VNumber b ] -> (state, VNumber (Pico_number.min a b))
+  | _ -> failwith "Wrong args"
+
+let builtin_max : builtin_fun =
+ fun state args ->
+  match args with
+  | [ VNumber a; VNumber b ] -> (state, VNumber (Pico_number.max a b))
+  | _ -> failwith "Wrong args"
+
+let level_2_builtins =
+  [ ("error", builtin_error); ("min", builtin_min); ("max", builtin_max) ]
 
 (* Level 5 *)
 

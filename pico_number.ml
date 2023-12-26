@@ -73,6 +73,8 @@ let ceil_bits (b : int) (n : t) : t =
   assert (ceil >= n);
   ceil
 
+let min (a : t) (b : t) : t = Int32.min a b
+let max (a : t) (b : t) : t = Int32.max a b
 let add (a : t) (b : t) : t = Int32.add a b
 let sub (a : t) (b : t) : t = Int32.sub a b
 
