@@ -179,3 +179,16 @@ let%test_unit _ = test_branch_prints "abstract_boolean.lua"
 let%test_unit _ = test_branch_count "branching_with_irrelevant_locals.lua" 1
 let%test_unit _ = test_branch_count "branching_with_allocations.lua" 1
 let%test_unit _ = test_branch_count "branching_into_return.lua" 1
+
+let%test "prepared_cfg.is_noop" =
+  let lua_code = "function f() end\n" in
+  let ast = Lua_parser.Parse.parse_from_string lua_code in
+  let stream = Frontend.compile_top_level_ast ast in
+  let cfg =
+    match Frontend.cfg_of_stream stream with
+    | _, [ { cfg; _ } ] -> cfg
+    | _ -> failwith "expected one function"
+  in
+  Printf.printf "%s\n" @@ Ir.show_cfg cfg;
+  let cfg = Interpreter.prepare_cfg cfg in
+  cfg.is_noop

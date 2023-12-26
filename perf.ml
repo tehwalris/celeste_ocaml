@@ -30,6 +30,7 @@ type counters = {
   handle_separately_no_phi : timed_counter ref;
   builtin_call : int ref;
   closure_call : int ref;
+  closure_call_noop : int ref;
   gc : timed_counter ref;
   normalize_state_maps_except_heap : timed_counter ref;
   flow_join : timed_counter ref;
@@ -50,6 +51,7 @@ let global_counters : counters =
     handle_separately_no_phi = ref empty_timed_counter;
     builtin_call = ref 0;
     closure_call = ref 0;
+    closure_call_noop = ref 0;
     gc = ref empty_timed_counter;
     normalize_state_maps_except_heap = ref empty_timed_counter;
     flow_join = ref empty_timed_counter;
@@ -89,6 +91,7 @@ let print_counters () =
   @@ show_timed_counter !(global_counters.handle_separately_no_phi);
   Printf.printf "  builtin_call: %d\n" !(global_counters.builtin_call);
   Printf.printf "  closure_call: %d\n" !(global_counters.closure_call);
+  Printf.printf "  closure_call_noop: %d\n" !(global_counters.closure_call_noop);
   Printf.printf "  gc: %s\n" @@ show_timed_counter !(global_counters.gc);
   Printf.printf "  normalize_state_maps_except_heap: %s\n"
   @@ show_timed_counter !(global_counters.normalize_state_maps_except_heap);
@@ -114,6 +117,7 @@ let reset_counters () =
   global_counters.handle_separately_no_phi := empty_timed_counter;
   global_counters.builtin_call := 0;
   global_counters.closure_call := 0;
+  global_counters.closure_call_noop := 0;
   global_counters.gc := empty_timed_counter;
   global_counters.normalize_state_maps_except_heap := empty_timed_counter;
   global_counters.flow_join := empty_timed_counter;

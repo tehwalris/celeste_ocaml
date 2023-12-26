@@ -71,6 +71,7 @@ type prepared_cfg = {
   cfg : Ir.cfg;
   live_variable_analysis : Flow.G.vertex -> Ir.LocalIdSet.t option;
   block_flow_g : Block_flow.G.t;
+  is_noop : bool;
 }
 
 type fixed_env = {
@@ -362,6 +363,14 @@ let prepare_cfg (cfg : Ir.cfg) : prepared_cfg =
     cfg;
     live_variable_analysis = analyze_live_variables cfg;
     block_flow_g = Block_flow.flow_graph_of_cfg cfg;
+    is_noop =
+      (match cfg with
+      | {
+       entry = { instructions = []; terminator = _, Ir.Ret None };
+       named = _;
+      } ->
+          true
+      | _ -> false);
   }
 
 type terminator_result =
@@ -611,63 +620,70 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                     (fun (fun_def, _) -> fun_def.Ir.name = fun_global_id)
                     fixed_env.fun_defs
                 in
-                let padded_arg_values =
-                  if List.length arg_values < List.length fun_def.Ir.arg_ids
-                  then
-                    arg_values
-                    @ List.init
-                        (List.length fun_def.Ir.arg_ids - List.length arg_values)
-                        (fun _ -> VNil None)
-                  else if
-                    List.length arg_values > List.length fun_def.Ir.arg_ids
-                  then BatList.take (List.length fun_def.Ir.arg_ids) arg_values
-                  else arg_values
-                in
-                let inner_state : state =
-                  {
-                    state with
-                    local_env =
-                      List.fold_left2
-                        (fun locals id value ->
-                          Ir.LocalIdMap.add id value locals)
-                        Ir.LocalIdMap.empty
-                        (fun_def.Ir.capture_ids @ fun_def.Ir.arg_ids)
-                        (captured_values @ padded_arg_values);
-                    outer_local_envs = state.local_env :: state.outer_local_envs;
-                  }
-                in
-                let inner_result =
-                  try
-                    interpret_cfg fixed_env
-                      (LazyStateSet.of_list [ inner_state ])
-                      fun_cfg
-                  with err ->
-                    Printf.eprintf "Error in function %s\n" fun_global_id;
-                    raise err
-                in
-                inner_result
-                |> (function
-                     | StateAndMaybeReturnSet.StateSet inner_states ->
-                         inner_states
-                         |> LazyStateSet.to_non_normalized_non_deduped_seq
-                         |> Seq.map (fun inner_state ->
-                                (inner_state, VNil None))
-                     | StateAndMaybeReturnSet.StateAndReturnSet
-                         inner_states_and_returns ->
-                         inner_states_and_returns |> StateAndReturnSet.to_seq)
-                |> Seq.map (fun (inner_state, return_value) ->
-                       let state =
-                         {
-                           heap = inner_state.heap;
-                           local_env = List.hd inner_state.outer_local_envs;
-                           outer_local_envs =
-                             List.tl inner_state.outer_local_envs;
-                           global_env = inner_state.global_env;
-                           prints = inner_state.prints;
-                         }
-                       in
-                       (state, return_value))
-                |> List.of_seq
+                if fun_cfg.is_noop then (
+                  incr_mut Perf.global_counters.closure_call_noop;
+                  [ (state, VNil None) ])
+                else
+                  let padded_arg_values =
+                    if List.length arg_values < List.length fun_def.Ir.arg_ids
+                    then
+                      arg_values
+                      @ List.init
+                          (List.length fun_def.Ir.arg_ids
+                          - List.length arg_values)
+                          (fun _ -> VNil None)
+                    else if
+                      List.length arg_values > List.length fun_def.Ir.arg_ids
+                    then
+                      BatList.take (List.length fun_def.Ir.arg_ids) arg_values
+                    else arg_values
+                  in
+                  let inner_state : state =
+                    {
+                      state with
+                      local_env =
+                        List.fold_left2
+                          (fun locals id value ->
+                            Ir.LocalIdMap.add id value locals)
+                          Ir.LocalIdMap.empty
+                          (fun_def.Ir.capture_ids @ fun_def.Ir.arg_ids)
+                          (captured_values @ padded_arg_values);
+                      outer_local_envs =
+                        state.local_env :: state.outer_local_envs;
+                    }
+                  in
+                  let inner_result =
+                    try
+                      interpret_cfg fixed_env
+                        (LazyStateSet.of_list [ inner_state ])
+                        fun_cfg
+                    with err ->
+                      Printf.eprintf "Error in function %s\n" fun_global_id;
+                      raise err
+                  in
+                  inner_result
+                  |> (function
+                       | StateAndMaybeReturnSet.StateSet inner_states ->
+                           inner_states
+                           |> LazyStateSet.to_non_normalized_non_deduped_seq
+                           |> Seq.map (fun inner_state ->
+                                  (inner_state, VNil None))
+                       | StateAndMaybeReturnSet.StateAndReturnSet
+                           inner_states_and_returns ->
+                           inner_states_and_returns |> StateAndReturnSet.to_seq)
+                  |> Seq.map (fun (inner_state, return_value) ->
+                         let state =
+                           {
+                             heap = inner_state.heap;
+                             local_env = List.hd inner_state.outer_local_envs;
+                             outer_local_envs =
+                               List.tl inner_state.outer_local_envs;
+                             global_env = inner_state.global_env;
+                             prints = inner_state.prints;
+                           }
+                         in
+                         (state, return_value))
+                  |> List.of_seq
             | _ -> failwith "Calling something that's not a function")
           states
       in
