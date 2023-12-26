@@ -23,6 +23,11 @@ function btn(i)
   end
 end
 
+function count(v)
+  -- TODO crash when a second argument is called
+  return #v
+end
+
 -- Noop functions
 
 function print() end

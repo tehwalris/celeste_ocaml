@@ -99,3 +99,11 @@ let modulo (a : t) (b : t) : t =
   of_ints (a_whole mod b) a_fraction
 
 let neg (n : t) : t = Int32.neg n
+
+let abs (n : t) : t =
+  if n >= Int32.zero then n
+  else
+    let neg_n = neg n in
+    if Int32.compare neg_n n <= 0 then
+      failwith "abs not well defined for this number";
+    neg_n
