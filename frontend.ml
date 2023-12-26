@@ -117,29 +117,40 @@ let parse_lua_string (s : string) : string =
   | _ -> unsupported_ast (String s)
 
 let rec compile_lhs_expression (c : Ctxt.t) (expr : ast)
-    (create_if_missing : bool) : Ir.local_id * stream =
+    (create_if_missing : bool) : Ir.local_id * string option * stream =
   match expr with
   | Ident name -> (
       match Ctxt.lookup_opt name c with
-      | Some id -> (id, [])
-      | None -> gen_id_and_stream (Ir.GetGlobal (name, create_if_missing)))
+      | Some id -> (id, Some name, [])
+      | None ->
+          let id, stream =
+            gen_id_and_stream (Ir.GetGlobal (name, create_if_missing))
+          in
+          (id, Some name, stream))
   | Clist [ lhs_expr; Key1 rhs_expr ] ->
-      let lhs_id, lhs_stream = compile_rhs_expression c lhs_expr in
-      let rhs_id, rhs_stream = compile_rhs_expression c rhs_expr in
+      let lhs_id, lhs_hint, lhs_stream =
+        compile_rhs_expression c lhs_expr None
+      in
+      let rhs_id, _, rhs_stream = compile_rhs_expression c rhs_expr None in
       let result_id = gen_local_id () in
       ( result_id,
+        lhs_hint,
         lhs_stream >@ rhs_stream
         >:: I (result_id, Ir.GetIndex (lhs_id, rhs_id, create_if_missing)) )
   | Clist [ lhs_expr; Key2 (Ident field_name) ] ->
-      let lhs_id, lhs_stream = compile_rhs_expression c lhs_expr in
+      let lhs_id, _, lhs_stream = compile_rhs_expression c lhs_expr None in
       let result_id = gen_local_id () in
       ( result_id,
+        Some field_name,
         lhs_stream
         >:: I (result_id, Ir.GetField (lhs_id, field_name, create_if_missing))
       )
   | _ -> unsupported_ast expr
 
-and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
+and compile_rhs_expression (c : Ctxt.t) (expr : ast)
+    (hint_for_function_name : string option) :
+    Ir.local_id * string option * stream =
+  let no_hint (id, stream) = (id, None, stream) in
   match expr with
   | Table (Elist assignments) ->
       let table_id = gen_local_id () in
@@ -148,8 +159,8 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
           (function
             | Assign (Ident field_name, value_expr) ->
                 let field_id = gen_local_id () in
-                let value_id, value_code =
-                  compile_rhs_expression c value_expr
+                let value_id, _, value_code =
+                  compile_rhs_expression c value_expr hint_for_function_name
                 in
                 value_code
                 >:: I (field_id, Ir.GetField (table_id, field_name, true))
@@ -158,57 +169,84 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast) : Ir.local_id * stream =
           (List.rev assignments)
       in
       ( table_id,
+        None,
         List.rev
           [
             I (table_id, Ir.Alloc);
             I (gen_local_id (), Ir.StoreEmptyTable table_id);
           ]
         >@ assignment_code )
-  | Number s -> gen_id_and_stream (Ir.NumberConstant (Pico_number.of_string s))
-  | Bool "true" -> gen_id_and_stream (Ir.BoolConstant true)
-  | Bool "false" -> gen_id_and_stream (Ir.BoolConstant false)
-  | Bool "nil" -> gen_id_and_stream Ir.NilConstant
-  | String s -> gen_id_and_stream (Ir.StringConstant (parse_lua_string s))
+  | Number s ->
+      no_hint @@ gen_id_and_stream (Ir.NumberConstant (Pico_number.of_string s))
+  | Bool "true" -> no_hint @@ gen_id_and_stream (Ir.BoolConstant true)
+  | Bool "false" -> no_hint @@ gen_id_and_stream (Ir.BoolConstant false)
+  | Bool "nil" -> no_hint @@ gen_id_and_stream Ir.NilConstant
+  | String s ->
+      no_hint @@ gen_id_and_stream (Ir.StringConstant (parse_lua_string s))
   | Unop (op, inner_expr) ->
-      let inner_id, inner_stream = compile_rhs_expression c inner_expr in
+      let inner_id, inner_hint, inner_stream =
+        compile_rhs_expression c inner_expr hint_for_function_name
+      in
       let result_id, result_stream =
         gen_id_and_stream (UnaryOp (String.trim op, inner_id))
       in
-      (result_id, inner_stream >@ result_stream)
+      (result_id, inner_hint, inner_stream >@ result_stream)
   | Binop ("and", left_expr, right_expr) ->
-      compile_and_or true c left_expr right_expr
+      no_hint @@ compile_and_or true c left_expr right_expr
   | Binop ("or", left_expr, right_expr) ->
-      compile_and_or false c left_expr right_expr
+      no_hint @@ compile_and_or false c left_expr right_expr
   | Binop (op, left_expr, right_expr) ->
-      let left_id, left_stream = compile_rhs_expression c left_expr in
-      let right_id, right_stream = compile_rhs_expression c right_expr in
+      let left_id, lhs_hint, left_stream =
+        compile_rhs_expression c left_expr hint_for_function_name
+      in
+      let right_id, _, right_stream =
+        compile_rhs_expression c right_expr
+          (match op with "=" -> lhs_hint | _ -> hint_for_function_name)
+      in
       let result_id, binop_stream =
         gen_id_and_stream (BinaryOp (left_id, String.trim op, right_id))
       in
-      (result_id, left_stream >@ right_stream >@ binop_stream)
-  | FunctionE fun_ast -> compile_closure c fun_ast (Some "anonymous")
-  | Pexp inner_expr -> compile_rhs_expression c inner_expr
+      (result_id, None, left_stream >@ right_stream >@ binop_stream)
+  | FunctionE fun_ast ->
+      let name =
+        match hint_for_function_name with
+        | Some name -> Some name
+        | None -> Some "anonymous"
+      in
+      no_hint @@ compile_closure c fun_ast name
+  | Pexp inner_expr ->
+      compile_rhs_expression c inner_expr hint_for_function_name
   | Clist [ callee_expr; Args (Elist arg_exprs) ] ->
-      let callee_id, callee_code = compile_rhs_expression c callee_expr in
+      let callee_id, callee_hint, callee_code =
+        compile_rhs_expression c callee_expr hint_for_function_name
+      in
       let arg_ids, arg_codes =
-        List.split @@ List.map (compile_rhs_expression c) arg_exprs
+        List.split
+        @@ List.map
+             (fun expr ->
+               let id, _, stream =
+                 compile_rhs_expression c expr hint_for_function_name
+               in
+               (id, stream))
+             arg_exprs
       in
       let result_id = gen_local_id () in
       ( result_id,
+        callee_hint,
         callee_code
         >@ List.concat @@ List.rev arg_codes
         >:: I (result_id, Ir.Call (callee_id, arg_ids)) )
   | _ ->
-      let lhs_id, lhs_stream = compile_lhs_expression c expr false in
+      let lhs_id, lhs_hint, lhs_stream = compile_lhs_expression c expr false in
       if lhs_id == -1 then unsupported_ast expr
       else
         let rhs_id = gen_local_id () in
-        (rhs_id, lhs_stream >:: I (rhs_id, Ir.Load lhs_id))
+        (rhs_id, lhs_hint, lhs_stream >:: I (rhs_id, Ir.Load lhs_id))
 
 and compile_and_or (is_and : bool) (c : Ctxt.t) (left_expr : ast)
     (right_expr : ast) : Ir.local_id * stream =
-  let left_id, left_stream = compile_rhs_expression c left_expr in
-  let right_id, right_stream = compile_rhs_expression c right_expr in
+  let left_id, _, left_stream = compile_rhs_expression c left_expr None in
+  let right_id, _, right_stream = compile_rhs_expression c right_expr None in
   let result_id = gen_local_id () in
   let left_label = gen_label "and_or_left" in
   let right_label = gen_label "and_or_right" in
@@ -309,8 +347,8 @@ and compile_statement (c : Ctxt.t) (break_label : Ir.label option) (stmt : ast)
     : Ctxt.t * stream =
   match stmt with
   | Assign (Elist [ lhs_expr ], Elist [ rhs_expr ]) ->
-      let lhs_id, lhs_code = compile_lhs_expression c lhs_expr true in
-      let rhs_id, rhs_code = compile_rhs_expression c rhs_expr in
+      let lhs_id, lhs_hint, lhs_code = compile_lhs_expression c lhs_expr true in
+      let rhs_id, _, rhs_code = compile_rhs_expression c rhs_expr lhs_hint in
       ( c,
         lhs_code >@ rhs_code >:: I (gen_local_id (), Ir.Store (lhs_id, rhs_id))
       )
@@ -323,7 +361,9 @@ and compile_statement (c : Ctxt.t) (break_label : Ir.label option) (stmt : ast)
           Lnames (Elist [ Ident lhs_name ]);
           Assign (Elist [ Ident lhs_name ], Elist [ rhs_expr ]);
         ]
-  | Clist _ -> (c, snd @@ compile_rhs_expression c stmt)
+  | Clist _ ->
+      let _, _, stream = compile_rhs_expression c stmt None in
+      (c, stream)
   | If1 (cond, body) ->
       compile_statement c break_label (If3 (cond, body, Slist []))
   | If2 (cond, then_body, else_body) ->
@@ -350,8 +390,8 @@ and compile_statement (c : Ctxt.t) (break_label : Ir.label option) (stmt : ast)
                ( (condition, body),
                  (body_label, (condition_label, next_condition_label)) )
              ->
-               let condition_id, condition_code =
-                 compile_rhs_expression c condition
+               let condition_id, _, condition_code =
+                 compile_rhs_expression c condition None
                in
                let body_stream =
                  compile_statements c break_label body
@@ -377,17 +417,17 @@ and compile_statement (c : Ctxt.t) (break_label : Ir.label option) (stmt : ast)
              Slist (elseifs @ [ Elseif (Bool "true", else_body) ]) ))
   | Return (Elist []) -> (c, [ T (gen_local_id (), Ir.Ret None) ])
   | Return (Elist [ expr ]) ->
-      let expr_id, expr_code = compile_rhs_expression c expr in
+      let expr_id, _, expr_code = compile_rhs_expression c expr None in
       (c, expr_code >:: T (gen_local_id (), Ir.Ret (Some expr_id)))
   | Function (FNlist [ Ident name ], fun_body) ->
       let closure_id, closure_code = compile_closure c fun_body (Some name) in
-      let name_id, name_code = compile_lhs_expression c (Ident name) true in
+      let name_id, _, name_code = compile_lhs_expression c (Ident name) true in
       ( c,
         closure_code >@ name_code
         >:: I (gen_local_id (), Ir.Store (name_id, closure_id)) )
   | For1 (Ident var_name, start_expr, end_expr, Slist statements) ->
-      let start_id, start_code = compile_rhs_expression c start_expr in
-      let end_id, end_code = compile_rhs_expression c end_expr in
+      let start_id, _, start_code = compile_rhs_expression c start_expr None in
+      let end_id, _, end_code = compile_rhs_expression c end_expr None in
       let val_id = gen_local_id () in
       let var_id = gen_local_id () in
       let step_id = gen_local_id () in
