@@ -12,21 +12,21 @@ let print_to_string arg =
   | VNumber n -> Int.to_string @@ Pico_number.int_of n
   | VBool b -> if b then "true" else "false"
   | VString s -> s
-  | VNil -> "nil"
+  | VNil _ -> "nil"
   | _ -> failwith "Wrong args"
 
 let builtin_print : builtin_fun =
  fun state args ->
   let arg = match args with [ v ] -> v | _ -> failwith "Wrong args" in
   let state = { state with prints = print_to_string arg :: state.prints } in
-  (state, VNil)
+  (state, VNil None)
 
 let builtin_debug : builtin_fun =
  fun state args ->
   Printf.printf "debug: %s\n%!"
   @@ String.concat " "
   @@ List.map (fun arg -> print_to_string arg) args;
-  (state, VNil)
+  (state, VNil None)
 
 let level_1_builtins =
   [

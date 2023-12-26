@@ -164,8 +164,7 @@ let rec compile_lhs_expression (c : Ctxt.t) (expr : ast)
   | _ -> unsupported_ast expr
 
 and compile_rhs_expression (c : Ctxt.t) (expr : ast)
-    (hint_for_function_name : string option) :
-    Ir.local_id * string option * stream =
+    (hint_from_parent : string option) : Ir.local_id * string option * stream =
   let no_hint (id, stream) = (id, None, stream) in
   match expr with
   | Table (Elist assignments) ->
@@ -176,7 +175,7 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast)
             | Assign (Ident field_name, value_expr) ->
                 let field_id = gen_local_id () in
                 let hint =
-                  match hint_for_function_name with
+                  match hint_from_parent with
                   | Some h -> Some (h ^ "." ^ field_name)
                   | None -> Some field_name
                 in
@@ -206,7 +205,7 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast)
       no_hint @@ gen_id_and_stream (Ir.StringConstant (parse_lua_string s))
   | Unop (op, inner_expr) ->
       let inner_id, inner_hint, inner_stream =
-        compile_rhs_expression c inner_expr hint_for_function_name
+        compile_rhs_expression c inner_expr hint_from_parent
       in
       let result_id, result_stream =
         gen_id_and_stream (UnaryOp (String.trim op, inner_id))
@@ -218,11 +217,11 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast)
       no_hint @@ compile_and_or false c left_expr right_expr
   | Binop (op, left_expr, right_expr) ->
       let left_id, lhs_hint, left_stream =
-        compile_rhs_expression c left_expr hint_for_function_name
+        compile_rhs_expression c left_expr hint_from_parent
       in
       let right_id, _, right_stream =
         compile_rhs_expression c right_expr
-          (match op with "=" -> lhs_hint | _ -> hint_for_function_name)
+          (match op with "=" -> lhs_hint | _ -> hint_from_parent)
       in
       let result_id, binop_stream =
         gen_id_and_stream (BinaryOp (left_id, String.trim op, right_id))
@@ -230,23 +229,22 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast)
       (result_id, None, left_stream >@ right_stream >@ binop_stream)
   | FunctionE fun_ast ->
       let name =
-        match hint_for_function_name with
+        match hint_from_parent with
         | Some name -> Some name
         | None -> Some "anonymous"
       in
       no_hint @@ compile_closure c fun_ast name
-  | Pexp inner_expr ->
-      compile_rhs_expression c inner_expr hint_for_function_name
+  | Pexp inner_expr -> compile_rhs_expression c inner_expr hint_from_parent
   | Clist [ callee_expr; Args (Elist arg_exprs) ] ->
       let callee_id, callee_hint, callee_code =
-        compile_rhs_expression c callee_expr hint_for_function_name
+        compile_rhs_expression c callee_expr hint_from_parent
       in
       let arg_ids, arg_codes =
         List.split
         @@ List.map
              (fun expr ->
                let id, _, stream =
-                 compile_rhs_expression c expr hint_for_function_name
+                 compile_rhs_expression c expr hint_from_parent
                in
                (id, stream))
              arg_exprs
