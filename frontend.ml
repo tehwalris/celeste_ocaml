@@ -131,17 +131,33 @@ let rec compile_lhs_expression (c : Ctxt.t) (expr : ast)
       let lhs_id, lhs_hint, lhs_stream =
         compile_rhs_expression c lhs_expr None
       in
-      let rhs_id, _, rhs_stream = compile_rhs_expression c rhs_expr None in
+      let rhs_id, rhs_hint, rhs_stream =
+        compile_rhs_expression c rhs_expr None
+      in
+      let hint =
+        match (lhs_hint, rhs_hint) with
+        | Some lhs_hint, Some rhs_hint -> Some (lhs_hint ^ "[" ^ rhs_hint ^ "]")
+        | Some lhs_hint, None -> Some lhs_hint
+        | None, Some rhs_hint -> Some rhs_hint
+        | None, None -> None
+      in
       let result_id = gen_local_id () in
       ( result_id,
-        lhs_hint,
+        hint,
         lhs_stream >@ rhs_stream
         >:: I (result_id, Ir.GetIndex (lhs_id, rhs_id, create_if_missing)) )
   | Clist [ lhs_expr; Key2 (Ident field_name) ] ->
-      let lhs_id, _, lhs_stream = compile_rhs_expression c lhs_expr None in
+      let lhs_id, lhs_hint, lhs_stream =
+        compile_rhs_expression c lhs_expr None
+      in
+      let hint =
+        match lhs_hint with
+        | Some h -> Some (h ^ "." ^ field_name)
+        | None -> Some field_name
+      in
       let result_id = gen_local_id () in
       ( result_id,
-        Some field_name,
+        hint,
         lhs_stream
         >:: I (result_id, Ir.GetField (lhs_id, field_name, create_if_missing))
       )
@@ -159,8 +175,13 @@ and compile_rhs_expression (c : Ctxt.t) (expr : ast)
           (function
             | Assign (Ident field_name, value_expr) ->
                 let field_id = gen_local_id () in
+                let hint =
+                  match hint_for_function_name with
+                  | Some h -> Some (h ^ "." ^ field_name)
+                  | None -> Some field_name
+                in
                 let value_id, _, value_code =
-                  compile_rhs_expression c value_expr hint_for_function_name
+                  compile_rhs_expression c value_expr hint
                 in
                 value_code
                 >:: I (field_id, Ir.GetField (table_id, field_name, true))
