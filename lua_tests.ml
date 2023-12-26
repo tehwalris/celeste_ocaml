@@ -189,6 +189,5 @@ let%test "prepared_cfg.is_noop" =
     | _, [ { cfg; _ } ] -> cfg
     | _ -> failwith "expected one function"
   in
-  Printf.printf "%s\n" @@ Ir.show_cfg cfg;
   let cfg = Interpreter.prepare_cfg cfg in
   cfg.is_noop

@@ -46,6 +46,42 @@ module HeapIdMap = Map.Make (struct
   let compare = Stdlib.compare
 end)
 
+module Heap = struct
+  type t = {
+    old_values : heap_value Array.t;
+    old_changed : bool Array.t; (* mutated, but only from false to true *)
+    new_values : heap_value HeapIdMap.t;
+  }
+
+  type storage_location = Old | New
+
+  let find_storage_location (heap_id : heap_id) (heap : t) =
+    if heap_id >= Array.length heap.old_values then New
+    else if heap.old_changed.(heap_id) then New
+    else Old
+
+  let empty =
+    { old_values = [||]; old_changed = [||]; new_values = HeapIdMap.empty }
+
+  let find (heap_id : heap_id) (heap : t) : heap_value =
+    match find_storage_location heap_id heap with
+    | Old -> heap.old_values.(heap_id)
+    | New -> HeapIdMap.find heap_id heap.new_values
+
+  let add (heap_id : heap_id) (value : heap_value) (heap : t) : t =
+    if find_storage_location heap_id heap = Old then
+      heap.old_changed.(heap_id) <- true;
+    { heap with new_values = HeapIdMap.add heap_id value heap.new_values }
+
+  let old_of_list (s : (heap_id * heap_value) List.t) : t =
+    List.iteri (fun i (heap_id, _) -> assert (heap_id = i)) s;
+    {
+      old_values = s |> List.to_seq |> Seq.map snd |> Array.of_seq;
+      old_changed = Array.make (List.length s) false;
+      new_values = HeapIdMap.empty;
+    }
+end
+
 module StringMap = Map.Make (struct
   type t = string
 
@@ -58,7 +94,7 @@ let show_string_id_map show_v s =
   |> String.concat "; "
 
 type state = {
-  heap : heap_value HeapIdMap.t;
+  heap : Heap.t;
   local_env : value Ir.LocalIdMap.t;
   outer_local_envs : value Ir.LocalIdMap.t list;
   global_env : heap_id StringMap.t;
@@ -100,16 +136,14 @@ let heap_id_from_pointer_local (state : state) (local_id : Ir.local_id) :
 
 let state_heap_add (state : state) (heap_value : heap_value) : state * heap_id =
   let heap_id = gen_heap_id () in
-  let state =
-    { state with heap = HeapIdMap.add heap_id heap_value state.heap }
-  in
+  let state = { state with heap = Heap.add heap_id heap_value state.heap } in
   (state, heap_id)
 
 let state_heap_update (state : state) (update : heap_value -> heap_value)
     (heap_id : heap_id) : state =
-  let old_heap_value = HeapIdMap.find heap_id state.heap in
+  let old_heap_value = Heap.find heap_id state.heap in
   let new_heap_value = update old_heap_value in
-  { state with heap = HeapIdMap.add heap_id new_heap_value state.heap }
+  { state with heap = Heap.add heap_id new_heap_value state.heap }
 
 let map_value_references f v : value =
   match v with
@@ -134,7 +168,7 @@ let map_heap_value_references f v : heap_value =
 let gc_heap (state : state) : state =
   Perf.count_and_time Perf.global_counters.gc @@ fun () ->
   let old_heap = state.heap in
-  let new_heap = ref HeapIdMap.empty in
+  let new_heap_values = ref [] in
   let new_ids_by_old_ids = ref HeapIdMap.empty in
   let next_id = ref 0 in
   let rec visit old_id =
@@ -144,17 +178,17 @@ let gc_heap (state : state) : state =
         let new_id = !next_id in
         next_id := !next_id + 1;
         new_ids_by_old_ids := HeapIdMap.add old_id new_id !new_ids_by_old_ids;
-        assert (not (HeapIdMap.mem new_id !new_heap));
-        let visited_value =
-          map_heap_value_references visit (HeapIdMap.find old_id old_heap)
-        in
-        new_heap := HeapIdMap.add new_id visited_value !new_heap;
+        (* ref is so that we can add to the list before recursing *)
+        let visited_value_ref = ref None in
+        new_heap_values := (new_id, visited_value_ref) :: !new_heap_values;
+        visited_value_ref :=
+          Some (map_heap_value_references visit (Heap.find old_id old_heap));
         new_id
   in
 
   let state =
     {
-      heap = HeapIdMap.empty;
+      heap = Heap.empty;
       global_env = StringMap.map visit state.global_env;
       local_env = Ir.LocalIdMap.map (map_value_references visit) state.local_env;
       outer_local_envs =
@@ -164,7 +198,14 @@ let gc_heap (state : state) : state =
       prints = state.prints;
     }
   in
-  { state with heap = !new_heap }
+
+  {
+    state with
+    heap =
+      !new_heap_values
+      |> List.rev_map (fun (id, v) -> (id, Option.get !v))
+      |> Heap.old_of_list;
+  }
 
 let normalize_state_maps_except_heap (state : state) : state =
   (* The = operator for maps considers the internal tree structure, not just the
@@ -386,7 +427,7 @@ let interpret_unary_op (state : state) (op : string) (v : value) : value =
   | "not", VUnknownBool -> VUnknownBool
   | "#", VString v -> VNumber (Pico_number.of_int @@ String.length v)
   | "#", VPointer heap_id -> (
-      let table = HeapIdMap.find heap_id state.heap in
+      let table = Heap.find heap_id state.heap in
       match table with
       | HArrayTable items ->
           VNumber (Pico_number.of_int @@ ListForArrayTable.length items)
@@ -468,7 +509,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
           let state =
             {
               state with
-              heap = HeapIdMap.add heap_id (HValue (VNil None)) state.heap;
+              heap = Heap.add heap_id (HValue (VNil None)) state.heap;
             }
           in
           (state, VPointer heap_id))
@@ -490,7 +531,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
       handle_separately_no_phi (fun state ->
           match Ir.LocalIdMap.find local_id state.local_env with
           | VPointer heap_id -> (
-              match HeapIdMap.find heap_id state.heap with
+              match Heap.find heap_id state.heap with
               | HValue value -> (state, value)
               | _ ->
                   failwith
@@ -533,7 +574,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
       handle_separately_no_phi (fun state ->
           let table_heap_id = heap_id_from_pointer_local state table_local_id in
           let old_fields =
-            match HeapIdMap.find table_heap_id state.heap with
+            match Heap.find table_heap_id state.heap with
             | HObjectTable old_fields -> old_fields
             | HUnknownTable -> []
             | _ ->
@@ -567,7 +608,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
             | _ -> failwith "Index is not an number"
           in
           let old_fields =
-            match HeapIdMap.find table_heap_id state.heap with
+            match Heap.find table_heap_id state.heap with
             | HArrayTable old_fields -> old_fields
             | HUnknownTable -> ListForArrayTable.empty
             | _ ->
@@ -608,7 +649,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                 arg_local_ids
             in
             let fun_heap_id = heap_id_from_pointer_local state fun_local_id in
-            match HeapIdMap.find fun_heap_id state.heap with
+            match Heap.find fun_heap_id state.heap with
             | HBuiltinFun name ->
                 incr_mut Perf.global_counters.builtin_call;
                 let builtin_fun = List.assoc name fixed_env.builtin_funs in
@@ -951,7 +992,7 @@ let init (cfg : Ir.cfg) (fun_defs : Ir.fun_def list)
     =
   let state =
     {
-      heap = HeapIdMap.empty;
+      heap = Heap.empty;
       local_env = Ir.LocalIdMap.empty;
       outer_local_envs = [];
       global_env = StringMap.empty;
