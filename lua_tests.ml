@@ -173,6 +173,7 @@ let%test_unit _ =
 
 let%test_unit _ = test_against_real_lua "string_length.lua" false
 let%test_unit _ = test_against_real_lua "tables.lua" true
+let%test_unit _ = test_against_real_lua "undefined_fields.lua" true
 let%test_unit _ = test_branch_prints "abstract_boolean_no_call.lua"
 let%test_unit _ = test_branch_prints "abstract_boolean.lua"
 let%test_unit _ = test_branch_count "branching_with_irrelevant_locals.lua" 1

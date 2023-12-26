@@ -16,7 +16,7 @@ type value =
   | VUnknownBool
   | VString of string
   | VNil
-  | VPointer of heap_id
+  | VPointer of heap_id option
 [@@deriving show]
 
 module ListForArrayTable = struct
@@ -74,7 +74,8 @@ type fixed_env = {
 let heap_id_from_pointer_local (state : state) (local_id : Ir.local_id) :
     heap_id =
   match Ir.LocalIdMap.find local_id state.local_env with
-  | VPointer heap_id -> heap_id
+  | VPointer (Some heap_id) -> heap_id
+  | VPointer None -> failwith "Attempted to dereference nil"
   | _ -> failwith "Value is not a pointer"
 
 let state_heap_add (state : state) (heap_value : heap_value) : state * heap_id =
@@ -97,7 +98,8 @@ let map_value_references f v : value =
   | VUnknownBool -> v
   | VString _ -> v
   | VNil -> v
-  | VPointer heap_id -> VPointer (f heap_id)
+  | VPointer (Some heap_id) -> VPointer (Some (f heap_id))
+  | VPointer None -> v
 
 let map_heap_value_references f v : heap_value =
   match v with
@@ -348,7 +350,7 @@ let interpret_unary_op (state : state) (op : string) (v : value) : value =
   | "not", VBool v -> VBool (not v)
   | "not", VUnknownBool -> VUnknownBool
   | "#", VString v -> VNumber (Pico_number.of_int @@ String.length v)
-  | "#", VPointer heap_id -> (
+  | "#", VPointer (Some heap_id) -> (
       let table = HeapIdMap.find heap_id state.heap in
       match table with
       | HArrayTable items ->
@@ -371,6 +373,10 @@ let interpret_binary_op (l : value) (op : string) (r : value) : value =
   match (l, op, r) with
   | a, "==", b when is_simple_value a && is_simple_value b -> VBool (a = b)
   | a, "~=", b when is_simple_value a && is_simple_value b -> VBool (a <> b)
+  | VPointer (Some _), "==", b when is_simple_value b -> VBool false
+  | VPointer (Some _), "~=", b when is_simple_value b -> VBool true
+  | a, "==", VPointer (Some _) when is_simple_value a -> VBool false
+  | a, "~=", VPointer (Some _) when is_simple_value a -> VBool true
   | VNumber l, "+", VNumber r -> VNumber (Pico_number.add l r)
   | VNumber l, "-", VNumber r -> VNumber (Pico_number.sub l r)
   | VNumber l, "*", VNumber r -> VNumber (Pico_number.mul l r)
@@ -414,38 +420,32 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
           let state =
             { state with heap = HeapIdMap.add heap_id (HValue VNil) state.heap }
           in
-          (state, VPointer heap_id))
+          (state, VPointer (Some heap_id)))
   | GetGlobal (name, create_if_missing) ->
       handle_separately_no_phi (fun state ->
-          let heap_id, state =
-            match StringMap.find_opt name state.global_env with
-            | Some heap_id -> (heap_id, state)
-            | None ->
-                if not create_if_missing then
-                  failwith
-                  @@ Printf.sprintf
-                       "Global %s not found, but create_if_missing was false"
-                       name;
-                let state, heap_id = state_heap_add state (HValue VNil) in
-                let state =
-                  {
-                    state with
-                    global_env = StringMap.add name heap_id state.global_env;
-                  }
-                in
-                (heap_id, state)
-          in
-          (state, VPointer heap_id))
+          match StringMap.find_opt name state.global_env with
+          | Some heap_id -> (state, VPointer (Some heap_id))
+          | None when create_if_missing ->
+              let state, heap_id = state_heap_add state (HValue VNil) in
+              let state =
+                {
+                  state with
+                  global_env = StringMap.add name heap_id state.global_env;
+                }
+              in
+              (state, VPointer (Some heap_id))
+          | None -> (state, VPointer None))
   | Load local_id ->
       handle_separately_no_phi (fun state ->
-          let heap_id = heap_id_from_pointer_local state local_id in
-          let value =
-            match HeapIdMap.find heap_id state.heap with
-            | HValue value -> value
-            | _ ->
-                failwith "Value is of a type that can not be stored in a local"
-          in
-          (state, value))
+          match Ir.LocalIdMap.find local_id state.local_env with
+          | VPointer (Some heap_id) -> (
+              match HeapIdMap.find heap_id state.heap with
+              | HValue value -> (state, value)
+              | _ ->
+                  failwith
+                    "Value is of a type that can not be stored in a local")
+          | VPointer None -> (state, VNil)
+          | _ -> failwith "Value is not a pointer")
   | Store (target_local_id, source_local_id) ->
       handle_separately_no_phi (fun state ->
           let heap_id = heap_id_from_pointer_local state target_local_id in
@@ -489,22 +489,18 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                   "GetField called on something that's not an object-like \
                    table or unknown table"
           in
-          let state, field_heap_id =
-            match List.assoc_opt field_name old_fields with
-            | Some field_heap_id -> (state, field_heap_id)
-            | None ->
-                if not create_if_missing then
-                  failwith "Field not found, but create_if_missing was false";
-                let state, field_heap_id = state_heap_add state (HValue VNil) in
-                let state =
-                  state_heap_update state
-                    (fun _ ->
-                      HObjectTable ((field_name, field_heap_id) :: old_fields))
-                    table_heap_id
-                in
-                (state, field_heap_id)
-          in
-          (state, VPointer field_heap_id))
+          match List.assoc_opt field_name old_fields with
+          | Some field_heap_id -> (state, VPointer (Some field_heap_id))
+          | None when create_if_missing ->
+              let state, field_heap_id = state_heap_add state (HValue VNil) in
+              let state =
+                state_heap_update state
+                  (fun _ ->
+                    HObjectTable ((field_name, field_heap_id) :: old_fields))
+                  table_heap_id
+              in
+              (state, VPointer (Some field_heap_id))
+          | None -> (state, VPointer None))
   | GetIndex (table_local_id, index_local_id, create_if_missing) ->
       handle_separately_no_phi (fun state ->
           let table_heap_id = heap_id_from_pointer_local state table_local_id in
@@ -525,25 +521,21 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                   "GetIndex called on something that's not an array-like table \
                    or unknown table"
           in
-          let state, field_heap_id =
-            match ListForArrayTable.nth_opt old_fields (index - 1) with
-            | Some field_heap_id -> (state, field_heap_id)
-            | None ->
-                if not create_if_missing then
-                  failwith "Index not found, but create_if_missing was false";
-                if index <> ListForArrayTable.length old_fields + 1 then
-                  failwith "Index is not the next index in the array";
-                let state, field_heap_id = state_heap_add state (HValue VNil) in
-                let state =
-                  state_heap_update state
-                    (fun _ ->
-                      HArrayTable
-                        (ListForArrayTable.append old_fields field_heap_id))
-                    table_heap_id
-                in
-                (state, field_heap_id)
-          in
-          (state, VPointer field_heap_id))
+          match ListForArrayTable.nth_opt old_fields (index - 1) with
+          | Some field_heap_id -> (state, VPointer (Some field_heap_id))
+          | None when create_if_missing ->
+              if index <> ListForArrayTable.length old_fields + 1 then
+                failwith "Index is not the next index in the array";
+              let state, field_heap_id = state_heap_add state (HValue VNil) in
+              let state =
+                state_heap_update state
+                  (fun _ ->
+                    HArrayTable
+                      (ListForArrayTable.append old_fields field_heap_id))
+                  table_heap_id
+              in
+              (state, VPointer (Some field_heap_id))
+          | None -> (state, VPointer None))
   | NumberConstant v ->
       handle_separately_no_phi (fun state -> (state, VNumber v))
   | BoolConstant v -> handle_separately_no_phi (fun state -> (state, VBool v))
@@ -906,7 +898,7 @@ let init (fun_defs : Ir.fun_def list) (builtins : (string * builtin_fun) list) :
       (fun state (name, _) ->
         let state, fun_heap_id = state_heap_add state (HBuiltinFun name) in
         let state, fun_ptr_heap_id =
-          state_heap_add state (HValue (VPointer fun_heap_id))
+          state_heap_add state (HValue (VPointer (Some fun_heap_id)))
         in
         if StringMap.mem name state.global_env then
           failwith "Duplicate builtin name";
