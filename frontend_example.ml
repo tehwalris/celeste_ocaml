@@ -14,11 +14,9 @@ _draw()
 __reset_button_states()
 |}
 
-let run_step fixed_env cfg states =
+let run_step cfg states =
   Perf.reset_counters ();
-  let states_and_maybe_returns =
-    Interpreter.interpret_cfg fixed_env states cfg
-  in
+  let states_and_maybe_returns = Interpreter.interpret_cfg states cfg in
   Perf.print_counters ();
   let states =
     match states_and_maybe_returns with
@@ -52,17 +50,7 @@ let () =
   in
   let stream = Frontend.compile_top_level_ast ast in
   let cfg, fun_defs = Frontend.cfg_of_stream stream in
-
-  let frame_ast =
-    Lua_parser.Parse.parse_from_string
-    @@ String.concat "\n" [ frame_code; "\n" ]
-  in
-  let frame_stream = Frontend.compile_top_level_ast frame_ast in
-  let frame_cfg, frame_fun_defs = Frontend.cfg_of_stream frame_stream in
-  assert (frame_fun_defs = []);
-  let frame_cfg = Interpreter.prepare_cfg frame_cfg in
-
-  let cfg, fixed_env, initial_state =
+  let cfg, fixed_env_ref, initial_state =
     Interpreter.init cfg fun_defs
     @@ List.concat
          [
@@ -72,11 +60,20 @@ let () =
          ]
   in
 
+  let frame_ast =
+    Lua_parser.Parse.parse_from_string
+    @@ String.concat "\n" [ frame_code; "\n" ]
+  in
+  let frame_stream = Frontend.compile_top_level_ast frame_ast in
+  let frame_cfg, frame_fun_defs = Frontend.cfg_of_stream frame_stream in
+  assert (frame_fun_defs = []);
+  let frame_cfg = Interpreter.prepare_cfg frame_cfg fixed_env_ref in
+
   let states = ref @@ Interpreter.LazyStateSet.of_list [ initial_state ] in
-  states := run_step fixed_env cfg !states;
+  states := run_step cfg !states;
   print_step !states;
   for i = 1 to 100 do
     Printf.printf "Frame %d\n%!" i;
-    states := run_step fixed_env frame_cfg !states;
+    states := run_step frame_cfg !states;
     print_step !states
   done

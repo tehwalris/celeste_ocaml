@@ -107,18 +107,6 @@ type state = {
 
 type builtin_fun = state -> value list -> state * value
 
-type prepared_cfg = {
-  cfg : Ir.cfg;
-  live_variable_analysis : Flow.G.vertex -> Ir.LocalIdSet.t option;
-  block_flow_g : Block_flow.G.t;
-  is_noop : bool;
-}
-
-type fixed_env = {
-  fun_defs : (Ir.fun_def * prepared_cfg) list;
-  builtin_funs : (string * builtin_fun) list;
-}
-
 let failwith_not_pointer (v : value) =
   match v with
   | VPointer _ | VNilPointer _ ->
@@ -381,6 +369,23 @@ module StateAndMaybeReturnSet = struct
     | StateAndReturnSet a -> StateAndReturnSet.is_empty a
 end
 
+type prepared_cfg = {
+  cfg : Ir.cfg;
+  analyze :
+    (Block_flow.flow_node -> StateAndMaybeReturnSet.t option) ->
+    bool ->
+    Block_flow.flow_node ->
+    StateAndMaybeReturnSet.t option;
+  is_noop : bool;
+}
+
+type fixed_env = {
+  fun_defs : (Ir.fun_def * prepared_cfg) list;
+  builtin_funs : (string * builtin_fun) list;
+}
+
+let empty_fixed_env : fixed_env = { fun_defs = []; builtin_funs = [] }
+
 let analyze_live_variables cfg =
   let module LiveVariableAnalysis =
     Graph.Fixpoint.Make
@@ -402,21 +407,6 @@ let analyze_live_variables cfg =
   in
   let g = Flow.flow_graph_of_cfg cfg in
   LiveVariableAnalysis.analyze (fun _ -> Some Ir.LocalIdSet.empty) g
-
-let prepare_cfg (cfg : Ir.cfg) : prepared_cfg =
-  {
-    cfg;
-    live_variable_analysis = analyze_live_variables cfg;
-    block_flow_g = Block_flow.flow_graph_of_cfg cfg;
-    is_noop =
-      (match cfg with
-      | {
-       entry = { instructions = []; terminator = _, Ir.Ret None };
-       named = _;
-      } ->
-          true
-      | _ -> false);
-  }
 
 type terminator_result =
   (* each item corresponds to an input state *)
@@ -699,7 +689,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                   in
                   let inner_result =
                     try
-                      interpret_cfg fixed_env
+                      interpret_cfg
                         (LazyStateSet.of_list [ inner_state ])
                         fun_cfg
                     with err ->
@@ -888,8 +878,17 @@ and flow_return (terminator : Ir.terminator) (states : LazyStateSet.t) :
         (LazyStateSet.map (clean_state_after_return None) states)
   | _ -> failwith "Unexpected flow"
 
-and interpret_cfg (fixed_env : fixed_env) (states : LazyStateSet.t)
-    (cfg : prepared_cfg) : StateAndMaybeReturnSet.t =
+and interpret_cfg (states : LazyStateSet.t) (cfg : prepared_cfg) :
+    StateAndMaybeReturnSet.t =
+  let init = function
+    | Block_flow.BeforeEntryBlock ->
+        Some (StateAndMaybeReturnSet.StateSet states)
+    | _ -> None
+  in
+  Perf.count_and_time Perf.global_counters.fixpoint @@ fun () ->
+  Option.get @@ cfg.analyze init !debug_prints Block_flow.Return
+
+let prepare_fixpoint (cfg : Ir.cfg) (fixed_env_ref : fixed_env ref) =
   let lift_no_return (f : LazyStateSet.t -> LazyStateSet.t) = function
     | StateAndMaybeReturnSet.StateSet states ->
         StateAndMaybeReturnSet.StateSet (f states)
@@ -902,6 +901,7 @@ and interpret_cfg (fixed_env : fixed_env) (states : LazyStateSet.t)
     | StateAndMaybeReturnSet.StateAndReturnSet _ ->
         failwith "Return value in unexpected part of CFG"
   in
+  let live_variable_analysis = analyze_live_variables cfg in
   let module CfgFixpoint =
     Custom_fixpoint.Make
       (Block_flow.G)
@@ -917,6 +917,7 @@ and interpret_cfg (fixed_env : fixed_env) (states : LazyStateSet.t)
           | Some v -> StateAndMaybeReturnSet.is_empty v
           | None -> true
 
+        let is_input v = v = Block_flow.BeforeEntryBlock
         let is_output = function Block_flow.Return -> true | _ -> false
         let untimed_join = Flow.lift_join StateAndMaybeReturnSet.union
 
@@ -953,14 +954,13 @@ and interpret_cfg (fixed_env : fixed_env) (states : LazyStateSet.t)
                 lift_no_return @@ flow_block_phi source_block_name target_block)
               (fun target_block ->
                 lift_no_return
-                @@ flow_block_before_join cfg.live_variable_analysis
-                     target_block)
+                @@ flow_block_before_join live_variable_analysis target_block)
               (fun block ->
-                lift_no_return @@ flow_block_post_phi fixed_env block)
+                lift_no_return @@ flow_block_post_phi !fixed_env_ref block)
               (fun terminator flow_target ->
                 lift_no_return @@ flow_branch terminator flow_target)
               (fun terminator -> lift_return_out_only @@ flow_return terminator)
-              cfg.cfg
+              cfg
           in
           fun edge data ->
             Perf.count_and_time Perf.global_counters.flow_analyze @@ fun () ->
@@ -978,22 +978,30 @@ and interpret_cfg (fixed_env : fixed_env) (states : LazyStateSet.t)
         let show_vertex = Block_flow.show_flow_node
       end)
   in
-  let g = cfg.block_flow_g in
+  let g = Block_flow.flow_graph_of_cfg cfg in
   add_to_mut Perf.global_counters.fixpoint_created_node
   @@ Block_flow.G.nb_vertex g;
   add_to_mut Perf.global_counters.fixpoint_created_edge
   @@ Block_flow.G.nb_edges g;
-  let init v =
-    if Block_flow.G.in_degree g v = 0 then
-      Some (StateAndMaybeReturnSet.StateSet states)
-    else None
-  in
-  Perf.count_and_time Perf.global_counters.fixpoint @@ fun () ->
-  Option.get @@ CfgFixpoint.analyze !debug_prints init g Block_flow.Return
+  CfgFixpoint.prepare g
+
+let prepare_cfg (cfg : Ir.cfg) (fixed_env_ref : fixed_env ref) : prepared_cfg =
+  {
+    cfg;
+    analyze = prepare_fixpoint cfg fixed_env_ref;
+    is_noop =
+      (match cfg with
+      | {
+       entry = { instructions = []; terminator = _, Ir.Ret None };
+       named = _;
+      } ->
+          true
+      | _ -> false);
+  }
 
 let init (cfg : Ir.cfg) (fun_defs : Ir.fun_def list)
-    (builtins : (string * builtin_fun) list) : prepared_cfg * fixed_env * state
-    =
+    (builtins : (string * builtin_fun) list) :
+    prepared_cfg * fixed_env ref * state =
   let state =
     {
       heap = Heap.empty;
@@ -1018,13 +1026,14 @@ let init (cfg : Ir.cfg) (fun_defs : Ir.fun_def list)
         })
       state builtins
   in
-  let fixed_env =
+  let fixed_env_ref = ref empty_fixed_env in
+  fixed_env_ref :=
     {
       fun_defs =
         List.map
-          (fun (fun_def : Ir.fun_def) -> (fun_def, prepare_cfg fun_def.cfg))
+          (fun (fun_def : Ir.fun_def) ->
+            (fun_def, prepare_cfg fun_def.cfg fixed_env_ref))
           fun_defs;
       builtin_funs = builtins;
-    }
-  in
-  (prepare_cfg cfg, fixed_env, state)
+    };
+  (prepare_cfg cfg fixed_env_ref, fixed_env_ref, state)

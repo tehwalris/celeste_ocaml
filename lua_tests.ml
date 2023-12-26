@@ -62,11 +62,9 @@ let prepare_to_run_our_lua lua_code =
   (cfg, fixed_env, state)
 
 let run_our_lua_for_states lua_code =
-  let cfg, fixed_env, state = prepare_to_run_our_lua lua_code in
+  let cfg, _, state = prepare_to_run_our_lua lua_code in
   let states_and_maybe_returns =
-    Interpreter.interpret_cfg fixed_env
-      (Interpreter.LazyStateSet.of_list [ state ])
-      cfg
+    Interpreter.interpret_cfg (Interpreter.LazyStateSet.of_list [ state ]) cfg
   in
   let states =
     match states_and_maybe_returns with
@@ -189,5 +187,5 @@ let%test "prepared_cfg.is_noop" =
     | _, [ { cfg; _ } ] -> cfg
     | _ -> failwith "expected one function"
   in
-  let cfg = Interpreter.prepare_cfg cfg in
+  let cfg = Interpreter.prepare_cfg cfg (ref Interpreter.empty_fixed_env) in
   cfg.is_noop
