@@ -393,6 +393,8 @@ let interpret_binary_op (l : value) (op : string) (r : value) : value =
   | a, "~=", VNil _ when is_simple_value a -> VBool true
   | VNil _, "==", b when is_simple_value b -> VBool false
   | VNil _, "~=", b when is_simple_value b -> VBool true
+  | VPointer l, "==", VPointer r -> VBool (l = r)
+  | VPointer l, "~=", VPointer r -> VBool (l <> r)
   | a, "==", VPointer _ when is_simple_value a -> VBool false
   | a, "~=", VPointer _ when is_simple_value a -> VBool true
   | VPointer _, "==", b when is_simple_value b -> VBool false
