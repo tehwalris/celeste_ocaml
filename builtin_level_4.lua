@@ -31,3 +31,5 @@ function sfx() end
 function pal() end
 function rectfill() end
 function map() end
+function spr() end
+function circfill() end

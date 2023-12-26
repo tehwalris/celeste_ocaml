@@ -58,8 +58,19 @@ let builtin_max : builtin_fun =
   | [ VNumber a; VNumber b ] -> (state, VNumber (Pico_number.max a b))
   | _ -> failwith "Wrong args"
 
+let builtin_flr : builtin_fun =
+ fun state args ->
+  match args with
+  | [ VNumber v ] -> (state, VNumber (Pico_number.flr v))
+  | _ -> failwith "Wrong args"
+
 let level_2_builtins =
-  [ ("error", builtin_error); ("min", builtin_min); ("max", builtin_max) ]
+  [
+    ("error", builtin_error);
+    ("min", builtin_min);
+    ("max", builtin_max);
+    ("flr", builtin_flr);
+  ]
 
 (* Level 5 *)
 
