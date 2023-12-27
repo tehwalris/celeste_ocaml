@@ -34,6 +34,19 @@ let length_of_vector = function VNumber a -> Array.length a
 let seq_of_vector = function
   | VNumber a -> a |> Array.to_seq |> Seq.map (fun v -> SNumber v)
 
+let seq_of_value = function
+  | Scalar s -> List.to_seq [ s ]
+  | Vector v -> seq_of_vector v
+
+let example_of_vector vec =
+  vec |> seq_of_vector |> Seq.uncons |> Option.get |> fst
+
+let can_vectorize_scalar_value = function SNumber _ -> true | _ -> false
+
+let can_vectorize_value = function
+  | Scalar s -> can_vectorize_scalar_value s
+  | Vector vec -> can_vectorize_scalar_value @@ example_of_vector vec
+
 let vector_of_seq_example seq scalar_example =
   let fail_mixed () = failwith "Cannot build vector of mixed types" in
   match scalar_example with
@@ -43,6 +56,7 @@ let vector_of_seq_example seq scalar_example =
         |> Seq.map (function SNumber n -> n | _ -> fail_mixed ())
         |> Array.of_seq)
   | _ ->
+      assert (not @@ can_vectorize_scalar_value scalar_example);
       failwith
       @@ Printf.sprintf "Cannot build vector from %s"
       @@ show_scalar_value scalar_example
@@ -135,6 +149,20 @@ module Heap = struct
       old_changed = Array.make (List.length s) false;
       new_values = HeapIdMap.empty;
     }
+
+  let old_of_seq (s : (heap_id * heap_value) Seq.t) : t =
+    s |> List.of_seq |> old_of_list
+
+  let seq_of_old (heap : t) : (heap_id * heap_value) Seq.t =
+    assert (HeapIdMap.is_empty heap.new_values);
+    Array.to_seqi heap.old_values
+
+  let map (f : heap_value -> heap_value) (heap : t) : t =
+    {
+      old_values = heap.old_values |> Array.map f;
+      old_changed = heap.old_changed;
+      new_values = heap.new_values |> HeapIdMap.map f;
+    }
 end
 
 module StringMap = Map.Make (struct
@@ -154,6 +182,7 @@ type state = {
   outer_local_envs : value Ir.LocalIdMap.t list;
   global_env : heap_id StringMap.t;
   prints : string list;
+  vector_size : int;
 }
 
 type builtin_fun = state -> value list -> state * value
@@ -240,6 +269,7 @@ let gc_heap (state : state) : state =
           (Ir.LocalIdMap.map @@ map_value_references visit)
           state.outer_local_envs;
       prints = state.prints;
+      vector_size = state.vector_size;
     }
   in
 
@@ -268,6 +298,7 @@ let normalize_state_maps_except_heap (state : state) : state =
           local_env |> Ir.LocalIdMap.to_seq |> Ir.LocalIdMap.of_seq)
         state.outer_local_envs;
     prints = state.prints;
+    vector_size = state.vector_size;
   }
 
 let normalize_state (state : state) : state =
@@ -275,6 +306,12 @@ let normalize_state (state : state) : state =
   state |> normalize_state_maps_except_heap |> gc_heap
 
 module StateSet = Set.Make (struct
+  type t = state
+
+  let compare = Stdlib.compare
+end)
+
+module StateMap = Map.Make (struct
   type t = state
 
   let compare = Stdlib.compare
@@ -420,6 +457,148 @@ module StateAndMaybeReturnSet = struct
     | StateSet a -> LazyStateSet.is_empty a
     | StateAndReturnSet a -> StateAndReturnSet.is_empty a
 end
+
+let map_state_values (f : value -> value) (state : state) : state =
+  let f_heap_value = function HValue v -> HValue (f v) | v -> v in
+  {
+    state with
+    heap = Heap.map f_heap_value state.heap (* TODO map other fields *);
+  }
+
+let zip_seq_list (seq_list : 'a Seq.t list) : 'a list Seq.t =
+  let rec zip_seq_list_helper (seq_list : 'a Seq.t list) : 'a list Seq.t =
+    match seq_list with
+    | [] -> Seq.empty
+    | first_seq :: _ -> (
+        match Seq.uncons first_seq with
+        | None ->
+            assert (List.for_all (fun seq -> Seq.is_empty seq) seq_list);
+            Seq.empty
+        | Some _ ->
+            let seq_heads, seq_tails =
+              seq_list
+              |> List.map (fun v -> Option.get @@ Seq.uncons v)
+              |> List.split
+            in
+            fun () -> Seq.Cons (seq_heads, zip_seq_list_helper seq_tails))
+  in
+
+  zip_seq_list_helper seq_list
+
+let zip_map_map (f : 'v list -> 'v) (to_seq : 'm -> ('k * 'v) Seq.t)
+    (of_seq : ('k * 'v) Seq.t -> 'm) (maps : 'm list) : 'm =
+  maps |> List.rev_map to_seq |> zip_seq_list
+  |> Seq.map (fun kv_list : ('k * 'v) ->
+         let k, v_list =
+           Option.get
+           @@ List.fold_right
+                (fun (k, v) acc ->
+                  match acc with
+                  | Some (only_key, values) ->
+                      assert (k = only_key);
+                      Some (k, v :: values)
+                  | None -> Some (k, [ v ]))
+                kv_list None
+         in
+         (k, f v_list))
+  |> of_seq
+
+let zip_map_state_values (f : value list -> value) (shape : state)
+    (states : state list) : state =
+  let f_heap_value (heap_values : heap_value list) : heap_value =
+    let values =
+      List.map (function HValue v -> Some v | _ -> None) heap_values
+    in
+    match values with
+    | Some _ :: _ -> HValue (values |> List.map Option.get |> f)
+    | None :: _ ->
+        assert (List.for_all Option.is_none values);
+        List.hd heap_values
+    | [] -> assert false
+  in
+
+  {
+    (* TODO don't statrt with shape *)
+    shape with
+    heap =
+      zip_map_map f_heap_value Heap.seq_of_old Heap.old_of_seq
+        (List.map (fun state -> state.heap) states);
+    (* TODO map other fields *)
+    (* TODO update vector size *)
+  }
+
+let rec normalize_value_for_shape = function
+  | Scalar (SNumber _) -> Scalar (SNumber (Pico_number.of_int 0))
+  | Scalar (SBool _) -> Scalar (SBool false)
+  | Scalar SUnknownBool -> Scalar (SBool false)
+  | Scalar (SString _) -> Scalar (SString "")
+  | Scalar (SNil hint) -> Scalar (SNil hint)
+  | Scalar (SPointer heap_id) -> Scalar (SPointer heap_id)
+  | Scalar (SNilPointer hint) -> Scalar (SNilPointer hint)
+  | Vector vec ->
+      let scalar_example, _ =
+        vec |> seq_of_vector |> Seq.uncons |> Option.get
+      in
+      normalize_value_for_shape (Scalar scalar_example)
+
+let shape_of_normalized_state (state : state) : state =
+  let shape = map_state_values normalize_value_for_shape state in
+  { shape with vector_size = -1 }
+
+let are_all_list_values_equal (l : 'a list) : bool =
+  match l with
+  | [] -> true
+  | first :: rest -> List.for_all (fun v -> v = first) rest
+
+let vectorize_states (states : LazyStateSet.t) : LazyStateSet.t =
+  let vectorize_values (values : value list) : value =
+    let example_value = List.hd values in
+    if can_vectorize_value example_value then
+      Vector
+        (values |> List.to_seq
+        |> Seq.concat_map seq_of_value
+        |> vector_of_non_empty_seq)
+    else (
+      assert (are_all_list_values_equal values);
+      example_value)
+  in
+  let vectorize_same_shape_states shape states =
+    let vectorized_state = zip_map_state_values vectorize_values shape states in
+    let vector_size = List.fold_left (fun a c -> a + c.vector_size) 0 states in
+    { vectorized_state with vector_size }
+  in
+  let dedup_within_vectors (state : state) : state =
+    Printf.printf "TODO\n";
+    state
+  in
+  let unvectorize_if_possible (state : state) : state =
+    if state.vector_size = 1 then
+      map_state_values
+        (fun v ->
+          match v |> seq_of_value |> List.of_seq with
+          | [ v ] -> Scalar v
+          | _ -> assert false)
+        state
+    else state
+  in
+
+  let states_by_shape =
+    Seq.fold_left
+      (fun states_by_shape state ->
+        let shape = shape_of_normalized_state state in
+        let old_list =
+          StateMap.find_opt shape states_by_shape |> Option.value ~default:[]
+        in
+        let new_list = state :: old_list in
+        StateMap.add shape new_list states_by_shape)
+      StateMap.empty
+      (LazyStateSet.to_normalized_non_deduped_seq states)
+  in
+  states_by_shape |> StateMap.to_seq
+  |> Seq.map (fun (shape, states) ->
+         vectorize_same_shape_states shape states
+         |> dedup_within_vectors |> unvectorize_if_possible)
+  |> List.of_seq |> LazyStateSet.of_list
 
 type prepared_cfg = {
   cfg : Ir.cfg;
@@ -795,6 +974,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                                List.tl inner_state.outer_local_envs;
                              global_env = inner_state.global_env;
                              prints = inner_state.prints;
+                             vector_size = inner_state.vector_size;
                            }
                          in
                          (state, return_value))
@@ -1061,6 +1241,7 @@ let init (cfg : Ir.cfg) (fun_defs : Ir.fun_def list)
       outer_local_envs = [];
       global_env = StringMap.empty;
       prints = [];
+      vector_size = 1;
     }
   in
   let state =
