@@ -5,28 +5,28 @@ open Interpreter
 let builtin_new_unknown_boolean : builtin_fun =
  fun state args ->
   assert (args = []);
-  (state, VUnknownBool)
+  (state, SUnknownBool)
 
 let print_to_string arg =
   match arg with
-  | VNumber n -> Int.to_string @@ Pico_number.int_of n
-  | VBool b -> if b then "true" else "false"
-  | VString s -> s
-  | VNil _ -> "nil"
+  | SNumber n -> Int.to_string @@ Pico_number.int_of n
+  | SBool b -> if b then "true" else "false"
+  | SString s -> s
+  | SNil _ -> "nil"
   | _ -> failwith "Wrong args"
 
 let builtin_print : builtin_fun =
  fun state args ->
   let arg = match args with [ v ] -> v | _ -> failwith "Wrong args" in
   let state = { state with prints = print_to_string arg :: state.prints } in
-  (state, VNil None)
+  (state, SNil None)
 
 let builtin_debug : builtin_fun =
  fun state args ->
   Printf.printf "debug: %s\n%!"
   @@ String.concat " "
   @@ List.map (fun arg -> print_to_string arg) args;
-  (state, VNil None)
+  (state, SNil None)
 
 let level_1_builtins =
   [
@@ -43,31 +43,31 @@ let builtin_error : builtin_fun =
  fun _state args ->
   match args with
   | [] -> failwith "error called"
-  | [ VString s ] -> failwith @@ Printf.sprintf "error called: %s" s
+  | [ SString s ] -> failwith @@ Printf.sprintf "error called: %s" s
   | _ -> failwith "Wrong args"
 
 let builtin_min : builtin_fun =
  fun state args ->
   match args with
-  | [ VNumber a; VNumber b ] -> (state, VNumber (Pico_number.min a b))
+  | [ SNumber a; SNumber b ] -> (state, SNumber (Pico_number.min a b))
   | _ -> failwith "Wrong args"
 
 let builtin_max : builtin_fun =
  fun state args ->
   match args with
-  | [ VNumber a; VNumber b ] -> (state, VNumber (Pico_number.max a b))
+  | [ SNumber a; SNumber b ] -> (state, SNumber (Pico_number.max a b))
   | _ -> failwith "Wrong args"
 
 let builtin_flr : builtin_fun =
  fun state args ->
   match args with
-  | [ VNumber v ] -> (state, VNumber (Pico_number.flr v))
+  | [ SNumber v ] -> (state, SNumber (Pico_number.flr v))
   | _ -> failwith "Wrong args"
 
 let builtin_abs : builtin_fun =
  fun state args ->
   match args with
-  | [ VNumber v ] -> (state, VNumber (Pico_number.abs v))
+  | [ SNumber v ] -> (state, SNumber (Pico_number.abs v))
   | _ -> failwith "Wrong args"
 
 let level_2_builtins =
@@ -105,13 +105,13 @@ let builtin_mget map_data : builtin_fun =
  fun state args ->
   let x, y =
     match args with
-    | [ VNumber x; VNumber y ] -> (Pico_number.int_of x, Pico_number.int_of y)
+    | [ SNumber x; SNumber y ] -> (Pico_number.int_of x, Pico_number.int_of y)
     | _ -> failwith "Wrong args"
   in
   assert (x >= 0 && x < 128);
   assert (y >= 0 && y < 64);
   let return_value =
-    VNumber (Pico_number.of_int @@ Array.get map_data (x + (y * 128)))
+    SNumber (Pico_number.of_int @@ Array.get map_data (x + (y * 128)))
   in
   (state, return_value)
 
@@ -119,12 +119,12 @@ let builtin_fget flag_data : builtin_fun =
  fun state args ->
   let i, b =
     match args with
-    | [ VNumber i; VNumber b ] -> (Pico_number.int_of i, Pico_number.int_of b)
+    | [ SNumber i; SNumber b ] -> (Pico_number.int_of i, Pico_number.int_of b)
     | _ -> failwith "Wrong args"
   in
   assert (b >= 0 && b < 8);
   let v = Array.get flag_data i in
-  let return_value = VBool (Int.logand v (Int.shift_left 1 b) != 0) in
+  let return_value = SBool (Int.logand v (Int.shift_left 1 b) != 0) in
   (state, return_value)
 
 let load_level_5_builtins () =
