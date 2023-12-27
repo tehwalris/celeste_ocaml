@@ -31,6 +31,15 @@ type value = Scalar of scalar_value | Vector of vector_value [@@deriving show]
 
 let length_of_vector = function VNumber a -> Array.length a
 
+let vector_compare_indices vec i j =
+  match vec with VNumber a -> Pico_number.compare a.(i) a.(j)
+
+let vector_extract_by_indices indices vec =
+  match vec with
+  | VNumber a ->
+      let a' = Array.init (Array.length indices) (fun i -> a.(indices.(i))) in
+      VNumber a'
+
 let seq_of_vector = function
   | VNumber a -> a |> Array.to_seq |> Seq.map (fun v -> SNumber v)
 
@@ -473,7 +482,7 @@ module StateAndMaybeReturnSet = struct
     | StateAndReturnSet a -> StateAndReturnSet.is_empty a
 end
 
-let map_state_values (f : value -> value) (state : state) : state =
+let state_map_values (f : value -> value) (state : state) : state =
   let f_heap_value = function HValue v -> HValue (f v) | v -> v in
   {
     state with
@@ -557,8 +566,74 @@ let rec normalize_value_for_shape = function
       normalize_value_for_shape (Scalar scalar_example)
 
 let shape_of_normalized_state (state : state) : state =
-  let shape = map_state_values normalize_value_for_shape state in
+  let shape = state_map_values normalize_value_for_shape state in
   { shape with vector_size = -1 }
+
+let unpack_state_vector_values (state : state) : vector_value list =
+  let vector_values = ref [] in
+  ignore
+  @@ state_map_values
+       (fun v ->
+         match v with
+         | Vector vec ->
+             vector_values := vec :: !vector_values;
+             v
+         | _ -> v)
+       state;
+  !vector_values
+
+let pack_state_vector_values (state : state) (old_values : vector_value list)
+    (new_values : vector_value list) : state =
+  let old_values = ref old_values in
+  let new_values = ref new_values in
+  state_map_values
+    (fun v ->
+      match v with
+      | Vector called_value ->
+          let old_value =
+            match !old_values with
+            | h :: t ->
+                old_values := t;
+                h
+            | [] -> assert false
+          in
+          let new_value =
+            match !new_values with
+            | h :: t ->
+                new_values := t;
+                h
+            | [] -> assert false
+          in
+          assert (old_value == called_value);
+          Vector new_value
+      | _ -> v)
+    state
+
+let dedup_vectorized_state (state : state) : state =
+  let lexicographic_compare_indices (fs : (int -> int -> int) list) :
+      int -> int -> int =
+   fun i j ->
+    List.fold_left
+      (fun last_result f ->
+        match last_result with 0 -> f i j | _ -> last_result)
+      0 fs
+  in
+
+  let old_vector_values = unpack_state_vector_values state in
+  let sorted_indices =
+    List.sort_uniq
+      (lexicographic_compare_indices
+         (List.map vector_compare_indices old_vector_values))
+      (List.init state.vector_size (fun i -> i))
+    |> Array.of_list
+  in
+  let new_vector_values =
+    old_vector_values |> List.map (vector_extract_by_indices sorted_indices)
+  in
+  {
+    (pack_state_vector_values state old_vector_values new_vector_values) with
+    vector_size = Array.length sorted_indices;
+  }
 
 let are_all_list_values_equal (l : 'a list) : bool =
   match l with
@@ -582,13 +657,9 @@ let vectorize_states (states : LazyStateSet.t) : LazyStateSet.t =
     let vector_size = List.fold_left (fun a c -> a + c.vector_size) 0 states in
     { vectorized_state with vector_size }
   in
-  let dedup_within_vectors (state : state) : state =
-    Printf.printf "TODO\n";
-    state
-  in
   let unvectorize_if_possible (state : state) : state =
     if state.vector_size = 1 then
-      map_state_values
+      state_map_values
         (fun v ->
           match v |> seq_of_value |> List.of_seq with
           | [ v ] -> Scalar v
@@ -612,7 +683,7 @@ let vectorize_states (states : LazyStateSet.t) : LazyStateSet.t =
   states_by_shape |> StateMap.to_seq
   |> Seq.map (fun (shape, states) ->
          vectorize_same_shape_states shape states
-         |> dedup_within_vectors |> unvectorize_if_possible)
+         |> dedup_vectorized_state |> unvectorize_if_possible)
   |> List.of_seq |> LazyStateSet.of_list
 
 type prepared_cfg = {
