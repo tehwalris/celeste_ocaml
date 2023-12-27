@@ -215,34 +215,40 @@ let%test_unit "vectorize" =
   in
   assert (Interpreter.StateSet.cardinal states = 3);
 
-  let states =
-    states |> Interpreter.StateSet.to_seq |> List.of_seq
-    |> Interpreter.LazyStateSet.of_list |> Interpreter.vectorize_states
-  in
-  assert (Interpreter.LazyStateSet.cardinal_upper_bound states = 1);
-  assert (
-    let only_state =
-      states |> Interpreter.LazyStateSet.to_normalized_non_deduped_seq
-      |> Seq.uncons |> Option.get |> fst
+  let assert_after_vectorize (states : Interpreter.LazyStateSet.t) =
+    let states = Interpreter.vectorize_states states in
+    assert (Interpreter.LazyStateSet.cardinal_upper_bound states = 1);
+    assert (
+      let only_state =
+        states |> Interpreter.LazyStateSet.to_normalized_non_deduped_seq
+        |> Seq.uncons |> Option.get |> fst
+      in
+      only_state.vector_size = 3);
+
+    let lua_code_post = load_lua_file "vectorize_post.lua" in
+    let ast_post = Lua_parser.Parse.parse_from_string (lua_code_post ^ "\n") in
+    let stream_post = Frontend.compile_top_level_ast ast_post in
+    let cfg_post, fun_defs_post = Frontend.cfg_of_stream stream_post in
+    assert (fun_defs_post = []);
+    let cfg_post = Interpreter.prepare_cfg cfg_post fixed_env_ref in
+
+    let states = interpret_no_return cfg_post states in
+    assert (Interpreter.StateSet.cardinal states = 1);
+
+    let expected_prints =
+      parse_expected_outputs lua_code_post |> List.sort compare
     in
-    only_state.vector_size = 3);
-
-  let lua_code_post = load_lua_file "vectorize_post.lua" in
-  let ast_post = Lua_parser.Parse.parse_from_string (lua_code_post ^ "\n") in
-  let stream_post = Frontend.compile_top_level_ast ast_post in
-  let cfg_post, fun_defs_post = Frontend.cfg_of_stream stream_post in
-  assert (fun_defs_post = []);
-  let cfg_post = Interpreter.prepare_cfg cfg_post fixed_env_ref in
-
-  let states = interpret_no_return cfg_post states in
-  assert (Interpreter.StateSet.cardinal states = 1);
-
-  let expected_prints =
-    parse_expected_outputs lua_code_post |> List.sort compare
+    let actual_prints =
+      states |> Interpreter.StateSet.to_seq
+      |> Seq.map (fun state -> List.rev state.Interpreter.prints)
+      |> List.of_seq
+    in
+    assert_string_list_list_equal actual_prints expected_prints
   in
-  let actual_prints =
-    states |> Interpreter.StateSet.to_seq
-    |> Seq.map (fun state -> List.rev state.Interpreter.prints)
-    |> List.of_seq
-  in
-  assert_string_list_list_equal actual_prints expected_prints
+
+  assert_after_vectorize @@ Interpreter.LazyStateSet.of_list @@ List.of_seq
+  @@ Interpreter.StateSet.to_seq states;
+  assert_after_vectorize @@ Interpreter.LazyStateSet.of_list @@ List.concat
+  @@ List.map
+       (fun s -> s |> Interpreter.StateSet.to_seq |> List.of_seq)
+       [ states; states ]
