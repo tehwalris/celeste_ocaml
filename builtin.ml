@@ -79,6 +79,21 @@ let builtin_print : builtin_fun =
   let state = { state with prints = print_to_string arg :: state.prints } in
   (state, Scalar (SNil None))
 
+let builtin_print_vector_sorted : builtin_fun =
+ fun state args ->
+  let vec =
+    match args with
+    | [ Vector (VNumber vec) ] -> vec
+    | _ -> failwith "Wrong args"
+  in
+  let s =
+    vec |> Array.to_list |> List.sort compare
+    |> List.map (fun v -> Int.to_string @@ Pico_number.int_of v)
+    |> String.concat ", "
+  in
+  let state = { state with prints = s :: state.prints } in
+  (state, Scalar (SNil None))
+
 let builtin_debug : builtin_fun =
  fun state args ->
   Printf.printf "debug: %s\n%!"
@@ -91,6 +106,7 @@ let level_1_builtins =
     ("__new_unknown_boolean", builtin_new_unknown_boolean);
     ("__new_vector", builtin_new_vector);
     ("__print", builtin_print);
+    ("__print_vector_sorted", builtin_print);
     ("__debug", builtin_debug);
   ]
 

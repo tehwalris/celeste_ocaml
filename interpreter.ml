@@ -95,6 +95,13 @@ module ListForArrayTable = struct
   let length = Array.length
   let nth_opt t i = if i < Array.length t then Some t.(i) else None
   let to_seq = Array.to_seq
+
+  let show t =
+    Printf.sprintf "[%s]"
+      (t |> Array.to_seq |> Seq.map string_of_int |> List.of_seq
+     |> String.concat ", ")
+
+  let pp fmt t = Format.pp_print_string fmt @@ show t
 end
 
 type heap_value =
@@ -104,6 +111,7 @@ type heap_value =
   | HUnknownTable
   | HClosure of Ir.global_id * value list
   | HBuiltinFun of string
+[@@deriving show]
 
 module HeapIdMap = Map.Make (struct
   type t = heap_id
@@ -163,6 +171,13 @@ module Heap = struct
       old_changed = heap.old_changed;
       new_values = heap.new_values |> HeapIdMap.map f;
     }
+
+  let debug_show (heap : t) : string =
+    Printf.sprintf "Old: %d [%s]\nNew: %d"
+      (Array.length heap.old_values)
+      (heap.old_values |> Array.to_seq |> Seq.map show_heap_value |> List.of_seq
+     |> String.concat ", ")
+      (HeapIdMap.cardinal heap.new_values)
 end
 
 module StringMap = Map.Make (struct

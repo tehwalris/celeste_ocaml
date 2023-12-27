@@ -196,3 +196,53 @@ let%test "prepared_cfg.is_noop" =
   in
   let cfg = Interpreter.prepare_cfg cfg (ref Interpreter.empty_fixed_env) in
   cfg.is_noop
+
+let%test_unit "vectorize" =
+  let interpret_no_return cfg states =
+    match Interpreter.interpret_cfg states cfg with
+    | Interpreter.StateAndMaybeReturnSet.StateSet states ->
+        Interpreter.LazyStateSet.to_normalized_state_set states
+    | Interpreter.StateAndMaybeReturnSet.StateAndReturnSet _ -> assert false
+  in
+
+  let lua_code_pre = load_lua_file "vectorize_pre.lua" in
+  let cfg_pre, fixed_env_ref, inital_state =
+    prepare_to_run_our_lua lua_code_pre
+  in
+  let states =
+    interpret_no_return cfg_pre
+    @@ Interpreter.LazyStateSet.of_list [ inital_state ]
+  in
+  assert (Interpreter.StateSet.cardinal states = 3);
+
+  let states =
+    states |> Interpreter.StateSet.to_seq |> List.of_seq
+    |> Interpreter.LazyStateSet.of_list |> Interpreter.vectorize_states
+  in
+  assert (Interpreter.LazyStateSet.cardinal_upper_bound states = 1);
+  assert (
+    let only_state =
+      states |> Interpreter.LazyStateSet.to_normalized_non_deduped_seq
+      |> Seq.uncons |> Option.get |> fst
+    in
+    only_state.vector_size = 3);
+
+  let lua_code_post = load_lua_file "vectorize_post.lua" in
+  let ast_post = Lua_parser.Parse.parse_from_string (lua_code_post ^ "\n") in
+  let stream_post = Frontend.compile_top_level_ast ast_post in
+  let cfg_post, fun_defs_post = Frontend.cfg_of_stream stream_post in
+  assert (fun_defs_post = []);
+  let cfg_post = Interpreter.prepare_cfg cfg_post fixed_env_ref in
+
+  let states = interpret_no_return cfg_post states in
+  assert (Interpreter.StateSet.cardinal states = 1);
+
+  let expected_prints =
+    parse_expected_outputs lua_code_post |> List.sort compare
+  in
+  let actual_prints =
+    states |> Interpreter.StateSet.to_seq
+    |> Seq.map (fun state -> List.rev state.Interpreter.prints)
+    |> List.of_seq
+  in
+  assert_string_list_list_equal actual_prints expected_prints
