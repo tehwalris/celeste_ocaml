@@ -1,32 +1,61 @@
 open Interpreter
 
+let make_number_number_builtin f : builtin_fun =
+  let number_of_scalar = function
+    | SNumber v -> v
+    | _ -> failwith "Some arguments are not numbers"
+  in
+  let f_scalar a b = SNumber (f (number_of_scalar a) (number_of_scalar b)) in
+  fun state args ->
+    match args with
+    | [ Scalar a; Scalar b ] -> (state, Scalar (f_scalar a b))
+    | [ Scalar a; Vector b ] ->
+        (state, Vector (map_vector (fun b -> f_scalar a b) b))
+    | [ Vector a; Scalar b ] ->
+        (state, Vector (map_vector (fun a -> f_scalar a b) a))
+    | [ Vector a; Vector b ] ->
+        (state, Vector (map2_vector (fun a b -> f_scalar a b) a b))
+    | _ -> failwith "Wrong args"
+
+let make_number_builtin f : builtin_fun =
+  let number_of_scalar = function
+    | SNumber v -> v
+    | _ -> failwith "Some arguments are not numbers"
+  in
+  let f_scalar a = SNumber (f (number_of_scalar a)) in
+  fun state args ->
+    match args with
+    | [ Scalar a ] -> (state, Scalar (f_scalar a))
+    | [ Vector a ] -> (state, Vector (map_vector f_scalar a))
+    | _ -> failwith "Wrong args"
+
 (* Level 1 *)
 
 let builtin_new_unknown_boolean : builtin_fun =
  fun state args ->
   assert (args = []);
-  (state, SUnknownBool)
+  (state, Scalar SUnknownBool)
 
 let print_to_string arg =
   match arg with
-  | SNumber n -> Int.to_string @@ Pico_number.int_of n
-  | SBool b -> if b then "true" else "false"
-  | SString s -> s
-  | SNil _ -> "nil"
+  | Scalar (SNumber n) -> Int.to_string @@ Pico_number.int_of n
+  | Scalar (SBool b) -> if b then "true" else "false"
+  | Scalar (SString s) -> s
+  | Scalar (SNil _) -> "nil"
   | _ -> failwith "Wrong args"
 
 let builtin_print : builtin_fun =
  fun state args ->
   let arg = match args with [ v ] -> v | _ -> failwith "Wrong args" in
   let state = { state with prints = print_to_string arg :: state.prints } in
-  (state, SNil None)
+  (state, Scalar (SNil None))
 
 let builtin_debug : builtin_fun =
  fun state args ->
   Printf.printf "debug: %s\n%!"
   @@ String.concat " "
   @@ List.map (fun arg -> print_to_string arg) args;
-  (state, SNil None)
+  (state, Scalar (SNil None))
 
 let level_1_builtins =
   [
@@ -43,32 +72,13 @@ let builtin_error : builtin_fun =
  fun _state args ->
   match args with
   | [] -> failwith "error called"
-  | [ SString s ] -> failwith @@ Printf.sprintf "error called: %s" s
+  | [ Scalar (SString s) ] -> failwith @@ Printf.sprintf "error called: %s" s
   | _ -> failwith "Wrong args"
 
-let builtin_min : builtin_fun =
- fun state args ->
-  match args with
-  | [ SNumber a; SNumber b ] -> (state, SNumber (Pico_number.min a b))
-  | _ -> failwith "Wrong args"
-
-let builtin_max : builtin_fun =
- fun state args ->
-  match args with
-  | [ SNumber a; SNumber b ] -> (state, SNumber (Pico_number.max a b))
-  | _ -> failwith "Wrong args"
-
-let builtin_flr : builtin_fun =
- fun state args ->
-  match args with
-  | [ SNumber v ] -> (state, SNumber (Pico_number.flr v))
-  | _ -> failwith "Wrong args"
-
-let builtin_abs : builtin_fun =
- fun state args ->
-  match args with
-  | [ SNumber v ] -> (state, SNumber (Pico_number.abs v))
-  | _ -> failwith "Wrong args"
+let builtin_min = make_number_number_builtin Pico_number.min
+let builtin_max = make_number_number_builtin Pico_number.max
+let builtin_flr = make_number_builtin Pico_number.flr
+let builtin_abs = make_number_builtin Pico_number.abs
 
 let level_2_builtins =
   [
@@ -105,27 +115,27 @@ let builtin_mget map_data : builtin_fun =
  fun state args ->
   let x, y =
     match args with
-    | [ SNumber x; SNumber y ] -> (Pico_number.int_of x, Pico_number.int_of y)
+    | [ Scalar (SNumber x); Scalar (SNumber y) ] ->
+        (Pico_number.int_of x, Pico_number.int_of y)
     | _ -> failwith "Wrong args"
   in
   assert (x >= 0 && x < 128);
   assert (y >= 0 && y < 64);
-  let return_value =
-    SNumber (Pico_number.of_int @@ Array.get map_data (x + (y * 128)))
-  in
-  (state, return_value)
+  ( state,
+    Scalar (SNumber (Pico_number.of_int @@ Array.get map_data (x + (y * 128))))
+  )
 
 let builtin_fget flag_data : builtin_fun =
  fun state args ->
   let i, b =
     match args with
-    | [ SNumber i; SNumber b ] -> (Pico_number.int_of i, Pico_number.int_of b)
+    | [ Scalar (SNumber i); Scalar (SNumber b) ] ->
+        (Pico_number.int_of i, Pico_number.int_of b)
     | _ -> failwith "Wrong args"
   in
   assert (b >= 0 && b < 8);
   let v = Array.get flag_data i in
-  let return_value = SBool (Int.logand v (Int.shift_left 1 b) != 0) in
-  (state, return_value)
+  (state, Scalar (SBool (Int.logand v (Int.shift_left 1 b) != 0)))
 
 let load_level_5_builtins () =
   let map_data = load_hex_file "map-data.txt" 8192 in

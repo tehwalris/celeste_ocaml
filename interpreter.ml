@@ -10,7 +10,7 @@ let gen_heap_id : unit -> heap_id =
     incr i;
     !i
 
-type value =
+type scalar_value =
   | SNumber of Pico_number.t
   | SBool of bool
   | SUnknownBool
@@ -19,6 +19,55 @@ type value =
   | SPointer of heap_id
   | SNilPointer of string
 [@@deriving show]
+
+type vector_value = VNumber of Pico_number.t Array.t
+
+let show_vector_value = function
+  | VNumber a -> Printf.sprintf "VNumber[%d]" @@ Array.length a
+
+let pp_vector_value fmt v = Format.pp_print_string fmt @@ show_vector_value v
+
+type value = Scalar of scalar_value | Vector of vector_value [@@deriving show]
+
+let length_of_vector = function VNumber a -> Array.length a
+
+let seq_of_vector = function
+  | VNumber a -> a |> Array.to_seq |> Seq.map (fun v -> SNumber v)
+
+let build_vector seq scalar_example =
+  let fail_mixed () = failwith "Cannot build vector of mixed types" in
+  match scalar_example with
+  | SNumber _ ->
+      VNumber
+        (seq
+        |> Seq.map (function SNumber n -> n | _ -> fail_mixed ())
+        |> Array.of_seq)
+  | _ ->
+      failwith
+      @@ Printf.sprintf "Cannot build vector from %s"
+      @@ show_scalar_value scalar_example
+
+let map_vector (f : scalar_value -> scalar_value) vec =
+  let length = length_of_vector vec in
+  if length = 0 then vec
+  else
+    let mapped_seq = seq_of_vector vec |> Seq.map f in
+    let scalar_example, _ = Option.get @@ Seq.uncons mapped_seq in
+    build_vector mapped_seq scalar_example
+
+let map2_vector (f : scalar_value -> scalar_value -> scalar_value) vec1 vec2 =
+  let length1 = length_of_vector vec1 in
+  let length2 = length_of_vector vec2 in
+  assert (length1 = length2);
+  if length1 = 0 || length2 = 0 then vec1
+  else
+    let mapped_seq =
+      seq_of_vector vec1
+      |> Seq.zip (seq_of_vector vec2)
+      |> Seq.map (fun (v1, v2) -> f v1 v2)
+    in
+    let scalar_example, _ = Option.get @@ Seq.uncons mapped_seq in
+    build_vector mapped_seq scalar_example
 
 module ListForArrayTable = struct
   type item = heap_id
@@ -109,20 +158,20 @@ type builtin_fun = state -> value list -> state * value
 
 let failwith_not_pointer (v : value) =
   match v with
-  | SPointer _ | SNilPointer _ ->
+  | Scalar (SPointer _) | Scalar (SNilPointer _) ->
       failwith "failwith_not_pointer called with pointer"
-  | SNil (Some hint) ->
+  | Scalar (SNil (Some hint)) ->
       failwith
       @@ Printf.sprintf "Value is not a pointer (value is nil; %s)" hint
-  | SNil None ->
+  | Scalar (SNil None) ->
       failwith @@ Printf.sprintf "Value is not a pointer (value is nil)"
   | _ -> failwith "Value is not a pointer"
 
 let heap_id_from_pointer_local (state : state) (local_id : Ir.local_id) :
     heap_id =
   match Ir.LocalIdMap.find local_id state.local_env with
-  | SPointer heap_id -> heap_id
-  | SNilPointer hint ->
+  | Scalar (SPointer heap_id) -> heap_id
+  | Scalar (SNilPointer hint) ->
       failwith @@ Printf.sprintf "Attempted to dereference nil (%s)" hint
   | v -> failwith_not_pointer v
 
@@ -139,13 +188,14 @@ let state_heap_update (state : state) (update : heap_value -> heap_value)
 
 let map_value_references f v : value =
   match v with
-  | SNumber _ -> v
-  | SBool _ -> v
-  | SUnknownBool -> v
-  | SString _ -> v
-  | SNil _ -> v
-  | SPointer heap_id -> SPointer (f heap_id)
-  | SNilPointer _ -> v
+  | Scalar (SNumber _) -> v
+  | Scalar (SBool _) -> v
+  | Scalar SUnknownBool -> v
+  | Scalar (SString _) -> v
+  | Scalar (SNil _) -> v
+  | Scalar (SPointer heap_id) -> Scalar (SPointer (f heap_id))
+  | Scalar (SNilPointer _) -> v
+  | Vector v -> Vector v
 
 let map_heap_value_references f v : heap_value =
   match v with
@@ -414,7 +464,50 @@ type terminator_result =
   (* each item might _not_ correspond to an input state *)
   | Br of (Ir.label * state) list
 
-let interpret_unary_op (state : state) (op : string) (v : value) : value =
+(* let interpret_unary_op (state : state) (op : string) (v : value) : value =
+   let fail_unsupported () =
+     failwith @@ Printf.sprintf "Unsupported unary op: %s %s" op (show_value v)
+   in
+
+   let interpret_inner_number v =
+     match op with
+     | "-" -> SNumber (Pico_number.neg v)
+     | _ -> fail_unsupported ()
+   in
+   let inner_bool v =
+     match op with "not" -> SBool (not v) | _ -> fail_unsupported ()
+   in
+   let inner_unknown_bool () =
+     match op with "not" -> SUnknownBool | _ -> fail_unsupported ()
+   in
+   let inner_string v =
+     match op with
+     | "#" -> SNumber (Pico_number.of_int @@ String.length v)
+     | _ -> fail_unsupported ()
+   in
+   let inner_pointer heap_id =
+     match op with
+     | "#" -> (
+         let table = Heap.find heap_id state.heap in
+         match table with
+         | HArrayTable items ->
+             SNumber (Pico_number.of_int @@ ListForArrayTable.length items)
+         | HUnknownTable -> SNumber (Pico_number.of_int 0)
+         | _ ->
+             failwith @@ Printf.sprintf "Expected HArrayTable or HUnknownTable")
+     | _ -> fail_unsupported ()
+   in
+
+   match v with
+   | Scalar (SNumber v) -> Scalar (interpret_inner_number v)
+   | Scalar (SBool v) -> Scalar (inner_bool v)
+   | Scalar SUnknownBool -> Scalar (inner_unknown_bool ())
+   | Scalar (SString v) -> Scalar (inner_string v)
+   | Scalar (SPointer heap_id) -> Scalar (inner_pointer heap_id)
+   | _ -> fail_unsupported () *)
+
+let interpret_unary_op_scalar (state : state) (op : string) (v : scalar_value) :
+    scalar_value =
   match (op, v) with
   | "-", SNumber v -> SNumber (Pico_number.neg v)
   | "not", SBool v -> SBool (not v)
@@ -428,9 +521,16 @@ let interpret_unary_op (state : state) (op : string) (v : value) : value =
       | HUnknownTable -> SNumber (Pico_number.of_int 0)
       | _ -> failwith @@ Printf.sprintf "Expected HArrayTable or HUnknownTable")
   | op, v ->
-      failwith @@ Printf.sprintf "Unsupported unary op: %s %s" op (show_value v)
+      failwith
+      @@ Printf.sprintf "Unsupported unary op: %s %s" op (show_scalar_value v)
 
-let interpret_binary_op (l : value) (op : string) (r : value) : value =
+let interpret_unary_op state op v =
+  match v with
+  | Scalar v -> Scalar (interpret_unary_op_scalar state op v)
+  | Vector v -> Vector (map_vector (interpret_unary_op_scalar state op) v)
+
+let interpret_binary_op_scalar (l : scalar_value) (op : string)
+    (r : scalar_value) : scalar_value =
   let is_simple_value v =
     match v with
     | SNumber _ -> true
@@ -476,8 +576,18 @@ let interpret_binary_op (l : value) (op : string) (r : value) : value =
       SString ((Int.to_string @@ Pico_number.int_of l) ^ r)
   | l, op, r ->
       failwith
-      @@ Printf.sprintf "Unsupported binary op: %s %s %s" (show_value l) op
-           (show_value r)
+      @@ Printf.sprintf "Unsupported binary op: %s %s %s" (show_scalar_value l)
+           op (show_scalar_value r)
+
+let interpret_binary_op l op r =
+  match (l, r) with
+  | Scalar l, Scalar r -> Scalar (interpret_binary_op_scalar l op r)
+  | Scalar l, Vector r ->
+      Vector (map_vector (fun r -> interpret_binary_op_scalar l op r) r)
+  | Vector l, Scalar r ->
+      Vector (map_vector (fun l -> interpret_binary_op_scalar l op r) l)
+  | Vector l, Vector r ->
+      Vector (map2_vector (fun l r -> interpret_binary_op_scalar l op r) l r)
 
 let debug_states (states : LazyStateSet.t) : string =
   if LazyStateSet.has_normalized_elements states then "normalized"
@@ -503,35 +613,40 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
           let state =
             {
               state with
-              heap = Heap.add heap_id (HValue (SNil None)) state.heap;
+              heap = Heap.add heap_id (HValue (Scalar (SNil None))) state.heap;
             }
           in
-          (state, SPointer heap_id))
+          (state, Scalar (SPointer heap_id)))
   | GetGlobal (name, create_if_missing) ->
       handle_separately_no_phi (fun state ->
           match StringMap.find_opt name state.global_env with
-          | Some heap_id -> (state, SPointer heap_id)
+          | Some heap_id -> (state, Scalar (SPointer heap_id))
           | None when create_if_missing ->
-              let state, heap_id = state_heap_add state (HValue (SNil None)) in
+              let state, heap_id =
+                state_heap_add state (HValue (Scalar (SNil None)))
+              in
               let state =
                 {
                   state with
                   global_env = StringMap.add name heap_id state.global_env;
                 }
               in
-              (state, SPointer heap_id)
-          | None -> (state, SNilPointer (Printf.sprintf "global %s" name)))
+              (state, Scalar (SPointer heap_id))
+          | None ->
+              (state, Scalar (SNilPointer (Printf.sprintf "global %s" name))))
   | Load local_id ->
       handle_separately_no_phi (fun state ->
           match Ir.LocalIdMap.find local_id state.local_env with
-          | SPointer heap_id -> (
+          | Scalar (SPointer heap_id) -> (
               match Heap.find heap_id state.heap with
               | HValue value -> (state, value)
               | _ ->
                   failwith
                     "Value is of a type that can not be stored in a local")
-          | SNilPointer hint ->
-              (state, SNil (Some (Printf.sprintf "nil pointer to %s" hint)))
+          | Scalar (SNilPointer hint) ->
+              ( state,
+                Scalar (SNil (Some (Printf.sprintf "nil pointer to %s" hint)))
+              )
           | v -> failwith_not_pointer v)
   | Store (target_local_id, source_local_id) ->
       handle_separately_no_phi (fun state ->
@@ -542,14 +657,14 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
           let state =
             state_heap_update state (fun _ -> HValue source_value) heap_id
           in
-          (state, SNil None))
+          (state, Scalar (SNil None)))
   | StoreEmptyTable local_id ->
       handle_separately_no_phi (fun state ->
           let heap_id = heap_id_from_pointer_local state local_id in
           let state =
             state_heap_update state (fun _ -> HUnknownTable) heap_id
           in
-          (state, SNil None))
+          (state, Scalar (SNil None)))
   | StoreClosure (target_local_id, fun_global_id, captured_local_ids) ->
       handle_separately_no_phi (fun state ->
           let heap_id = heap_id_from_pointer_local state target_local_id in
@@ -563,7 +678,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
               (fun _ -> HClosure (fun_global_id, captured_values))
               heap_id
           in
-          (state, SNil None))
+          (state, Scalar (SNil None)))
   | GetField (table_local_id, field_name, create_if_missing) ->
       handle_separately_no_phi (fun state ->
           let table_heap_id = heap_id_from_pointer_local state table_local_id in
@@ -577,10 +692,10 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                    table or unknown table"
           in
           match List.assoc_opt field_name old_fields with
-          | Some field_heap_id -> (state, SPointer field_heap_id)
+          | Some field_heap_id -> (state, Scalar (SPointer field_heap_id))
           | None when create_if_missing ->
               let state, field_heap_id =
-                state_heap_add state (HValue (SNil None))
+                state_heap_add state (HValue (Scalar (SNil None)))
               in
               let state =
                 state_heap_update state
@@ -588,18 +703,20 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                     HObjectTable ((field_name, field_heap_id) :: old_fields))
                   table_heap_id
               in
-              (state, SPointer field_heap_id)
-          | None -> (state, SNilPointer (Printf.sprintf "field %s" field_name)))
+              (state, Scalar (SPointer field_heap_id))
+          | None ->
+              ( state,
+                Scalar (SNilPointer (Printf.sprintf "field %s" field_name)) ))
   | GetIndex (table_local_id, index_local_id, create_if_missing) ->
       handle_separately_no_phi (fun state ->
           let table_heap_id = heap_id_from_pointer_local state table_local_id in
           let index =
             match Ir.LocalIdMap.find index_local_id state.local_env with
-            | SNumber i ->
+            | Scalar (SNumber i) ->
                 if Pico_number.fraction_int_of i <> 0 then
-                  failwith "Index is not an integer";
+                  failwith "Index is a scalar number, but not an integer";
                 Pico_number.int_of i
-            | _ -> failwith "Index is not an number"
+            | _ -> failwith "Index is not a scalar number"
           in
           let old_fields =
             match Heap.find table_heap_id state.heap with
@@ -611,12 +728,12 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                    or unknown table"
           in
           match ListForArrayTable.nth_opt old_fields (index - 1) with
-          | Some field_heap_id -> (state, SPointer field_heap_id)
+          | Some field_heap_id -> (state, Scalar (SPointer field_heap_id))
           | None when create_if_missing ->
               if index <> ListForArrayTable.length old_fields + 1 then
                 failwith "Index is not the next index in the array";
               let state, field_heap_id =
-                state_heap_add state (HValue (SNil None))
+                state_heap_add state (HValue (Scalar (SNil None)))
               in
               let state =
                 state_heap_update state
@@ -625,14 +742,17 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                       (ListForArrayTable.append old_fields field_heap_id))
                   table_heap_id
               in
-              (state, SPointer field_heap_id)
-          | None -> (state, SNilPointer (Printf.sprintf "index %d" index)))
+              (state, Scalar (SPointer field_heap_id))
+          | None ->
+              (state, Scalar (SNilPointer (Printf.sprintf "index %d" index))))
   | NumberConstant v ->
-      handle_separately_no_phi (fun state -> (state, SNumber v))
-  | BoolConstant v -> handle_separately_no_phi (fun state -> (state, SBool v))
+      handle_separately_no_phi (fun state -> (state, Scalar (SNumber v)))
+  | BoolConstant v ->
+      handle_separately_no_phi (fun state -> (state, Scalar (SBool v)))
   | StringConstant v ->
-      handle_separately_no_phi (fun state -> (state, SString v))
-  | NilConstant -> handle_separately_no_phi (fun state -> (state, SNil None))
+      handle_separately_no_phi (fun state -> (state, Scalar (SString v)))
+  | NilConstant ->
+      handle_separately_no_phi (fun state -> (state, Scalar (SNil None)))
   | Call (fun_local_id, arg_local_ids) ->
       let results =
         List.concat_map
@@ -657,7 +777,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                 in
                 if fun_cfg.is_noop then (
                   incr_mut Perf.global_counters.closure_call_noop;
-                  [ (state, SNil None) ])
+                  [ (state, Scalar (SNil None)) ])
                 else
                   let padded_arg_values =
                     if List.length arg_values < List.length fun_def.Ir.arg_ids
@@ -666,7 +786,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                       @ List.init
                           (List.length fun_def.Ir.arg_ids
                           - List.length arg_values)
-                          (fun _ -> SNil None)
+                          (fun _ -> Scalar (SNil None))
                     else if
                       List.length arg_values > List.length fun_def.Ir.arg_ids
                     then
@@ -702,7 +822,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                            inner_states
                            |> LazyStateSet.to_non_normalized_non_deduped_seq
                            |> Seq.map (fun inner_state ->
-                                  (inner_state, SNil None))
+                                  (inner_state, Scalar (SNil None)))
                        | StateAndMaybeReturnSet.StateAndReturnSet
                            inner_states_and_returns ->
                            inner_states_and_returns |> StateAndReturnSet.to_seq)
@@ -733,31 +853,6 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
           let right_value = Ir.LocalIdMap.find right_local_id state.local_env in
           (state, interpret_binary_op left_value op right_value))
   | Phi _ -> failwith "Phi nodes should be handled by phi_block_flow"
-
-and interpret_terminator (states : state list) (terminator : Ir.terminator) :
-    terminator_result =
-  match terminator with
-  | Ir.Ret (Some local_id) ->
-      let return_values =
-        List.map
-          (fun state -> Ir.LocalIdMap.find local_id state.local_env)
-          states
-      in
-      Ret (Some return_values)
-  | Ir.Ret None -> Ret None
-  | Ir.Br label -> Br (List.map (fun state -> (label, state)) states)
-  | Ir.Cbr (local_id, true_label, false_label) ->
-      Br
-        (List.concat_map
-           (fun state ->
-             let labels =
-               match Ir.LocalIdMap.find local_id state.local_env with
-               | SBool false | SNil _ -> [ false_label ]
-               | SUnknownBool -> [ true_label; false_label ]
-               | _ -> [ true_label ]
-             in
-             List.map (fun label -> (label, state)) labels)
-           states)
 
 and flow_block_phi (source_block_name : Ir.label) (target_block : Ir.block)
     (states : LazyStateSet.t) : LazyStateSet.t =
@@ -846,9 +941,10 @@ and flow_branch (terminator : Ir.terminator) (flow_target : Ir.label)
       LazyStateSet.filter
         (fun state ->
           match Ir.LocalIdMap.find local_id state.local_env with
-          | SBool false | SNil _ -> flow_target = false_label
-          | SUnknownBool -> true
-          | _ -> flow_target = true_label)
+          | Scalar (SBool false) | Scalar (SNil _) -> flow_target = false_label
+          | Scalar SUnknownBool -> true
+          | Scalar _ -> flow_target = true_label
+          | Vector _ -> failwith "TODO vector cbr")
         states
   | _ -> failwith "Unexpected flow"
 
@@ -1012,7 +1108,7 @@ let init (cfg : Ir.cfg) (fun_defs : Ir.fun_def list)
       (fun state (name, _) ->
         let state, fun_heap_id = state_heap_add state (HBuiltinFun name) in
         let state, fun_ptr_heap_id =
-          state_heap_add state (HValue (SPointer fun_heap_id))
+          state_heap_add state (HValue (Scalar (SPointer fun_heap_id)))
         in
         if StringMap.mem name state.global_env then
           failwith "Duplicate builtin name";
