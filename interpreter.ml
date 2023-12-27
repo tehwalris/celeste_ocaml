@@ -34,7 +34,7 @@ let length_of_vector = function VNumber a -> Array.length a
 let seq_of_vector = function
   | VNumber a -> a |> Array.to_seq |> Seq.map (fun v -> SNumber v)
 
-let build_vector seq scalar_example =
+let vector_of_seq_example seq scalar_example =
   let fail_mixed () = failwith "Cannot build vector of mixed types" in
   match scalar_example with
   | SNumber _ ->
@@ -47,13 +47,14 @@ let build_vector seq scalar_example =
       @@ Printf.sprintf "Cannot build vector from %s"
       @@ show_scalar_value scalar_example
 
+let vector_of_non_empty_seq seq =
+  let scalar_example, _ = Option.get @@ Seq.uncons seq in
+  vector_of_seq_example seq scalar_example
+
 let map_vector (f : scalar_value -> scalar_value) vec =
   let length = length_of_vector vec in
   if length = 0 then vec
-  else
-    let mapped_seq = seq_of_vector vec |> Seq.map f in
-    let scalar_example, _ = Option.get @@ Seq.uncons mapped_seq in
-    build_vector mapped_seq scalar_example
+  else seq_of_vector vec |> Seq.map f |> vector_of_non_empty_seq
 
 let map2_vector (f : scalar_value -> scalar_value -> scalar_value) vec1 vec2 =
   let length1 = length_of_vector vec1 in
@@ -67,18 +68,19 @@ let map2_vector (f : scalar_value -> scalar_value -> scalar_value) vec1 vec2 =
       |> Seq.map (fun (v1, v2) -> f v1 v2)
     in
     let scalar_example, _ = Option.get @@ Seq.uncons mapped_seq in
-    build_vector mapped_seq scalar_example
+    vector_of_seq_example mapped_seq scalar_example
 
 module ListForArrayTable = struct
-  type item = heap_id
-  type t = item Array.t
+  type t = heap_id Array.t
 
   let empty = [||]
+  let is_empty t = Array.length t = 0
   let get t i = t.(i)
   let append t item = Array.append t [| item |]
   let map = Array.map
   let length = Array.length
   let nth_opt t i = if i < Array.length t then Some t.(i) else None
+  let to_seq = Array.to_seq
 end
 
 type heap_value =
@@ -463,48 +465,6 @@ type terminator_result =
   | Ret of value list option
   (* each item might _not_ correspond to an input state *)
   | Br of (Ir.label * state) list
-
-(* let interpret_unary_op (state : state) (op : string) (v : value) : value =
-   let fail_unsupported () =
-     failwith @@ Printf.sprintf "Unsupported unary op: %s %s" op (show_value v)
-   in
-
-   let interpret_inner_number v =
-     match op with
-     | "-" -> SNumber (Pico_number.neg v)
-     | _ -> fail_unsupported ()
-   in
-   let inner_bool v =
-     match op with "not" -> SBool (not v) | _ -> fail_unsupported ()
-   in
-   let inner_unknown_bool () =
-     match op with "not" -> SUnknownBool | _ -> fail_unsupported ()
-   in
-   let inner_string v =
-     match op with
-     | "#" -> SNumber (Pico_number.of_int @@ String.length v)
-     | _ -> fail_unsupported ()
-   in
-   let inner_pointer heap_id =
-     match op with
-     | "#" -> (
-         let table = Heap.find heap_id state.heap in
-         match table with
-         | HArrayTable items ->
-             SNumber (Pico_number.of_int @@ ListForArrayTable.length items)
-         | HUnknownTable -> SNumber (Pico_number.of_int 0)
-         | _ ->
-             failwith @@ Printf.sprintf "Expected HArrayTable or HUnknownTable")
-     | _ -> fail_unsupported ()
-   in
-
-   match v with
-   | Scalar (SNumber v) -> Scalar (interpret_inner_number v)
-   | Scalar (SBool v) -> Scalar (inner_bool v)
-   | Scalar SUnknownBool -> Scalar (inner_unknown_bool ())
-   | Scalar (SString v) -> Scalar (inner_string v)
-   | Scalar (SPointer heap_id) -> Scalar (inner_pointer heap_id)
-   | _ -> fail_unsupported () *)
 
 let interpret_unary_op_scalar (state : state) (op : string) (v : scalar_value) :
     scalar_value =

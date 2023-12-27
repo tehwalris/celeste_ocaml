@@ -36,12 +36,41 @@ let builtin_new_unknown_boolean : builtin_fun =
   assert (args = []);
   (state, Scalar SUnknownBool)
 
-let print_to_string arg =
+let builtin_new_vector : builtin_fun =
+ fun state args ->
+  let table_heap_id =
+    match args with [ Scalar (SPointer v) ] -> v | _ -> failwith "Wrong args"
+  in
+  let item_heap_ids =
+    match Heap.find table_heap_id state.heap with
+    | HArrayTable items -> items
+    | _ -> failwith @@ Printf.sprintf "Expected HArrayTable"
+  in
+  if ListForArrayTable.is_empty item_heap_ids then
+    failwith "Cannot make a vector with no values";
+  let vec =
+    item_heap_ids |> ListForArrayTable.to_seq
+    |> Seq.map (fun id ->
+           match Heap.find id state.heap with
+           | HValue (Scalar v) -> v
+           | HValue (Vector _) -> failwith "Cannot make vector of vector values"
+           | _ ->
+               failwith "Value is of a type that can not be stored in a local")
+    |> vector_of_non_empty_seq
+  in
+  (state, Vector vec)
+
+let rec print_to_string arg =
   match arg with
   | Scalar (SNumber n) -> Int.to_string @@ Pico_number.int_of n
   | Scalar (SBool b) -> if b then "true" else "false"
   | Scalar (SString s) -> s
   | Scalar (SNil _) -> "nil"
+  | Vector vec ->
+      Printf.sprintf "V[%s]" @@ String.concat ", "
+      @@ (vec |> seq_of_vector
+         |> Seq.map (fun v -> print_to_string (Scalar v))
+         |> List.of_seq)
   | _ -> failwith "Wrong args"
 
 let builtin_print : builtin_fun =
@@ -60,6 +89,7 @@ let builtin_debug : builtin_fun =
 let level_1_builtins =
   [
     ("__new_unknown_boolean", builtin_new_unknown_boolean);
+    ("__new_vector", builtin_new_vector);
     ("__print", builtin_print);
     ("__debug", builtin_debug);
   ]

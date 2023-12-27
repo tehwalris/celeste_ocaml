@@ -132,8 +132,14 @@ let test_against_real_lua filename include_level_3 =
   let expected_prints = run_real_lua lua_code_for_real_lua in
   assert_string_list_equal actual_prints expected_prints
 
-let test_branch_prints filename =
+let test_branch_prints filename include_level_3 =
   let lua_code = load_lua_file filename in
+  let lua_code =
+    if include_level_3 then
+      BatFile.with_file_in "builtin_level_3.lua" BatIO.read_all
+      ^ "\n" ^ lua_code
+    else lua_code
+  in
   let expected_prints = parse_expected_outputs lua_code |> List.sort compare in
   let actual_prints = run_our_lua_for_prints lua_code |> List.sort compare in
   assert_string_list_list_equal actual_prints expected_prints
@@ -172,8 +178,9 @@ let%test_unit _ =
 let%test_unit _ = test_against_real_lua "string_length.lua" false
 let%test_unit _ = test_against_real_lua "tables.lua" true
 let%test_unit _ = test_against_real_lua "undefined_fields.lua" true
-let%test_unit _ = test_branch_prints "abstract_boolean_no_call.lua"
-let%test_unit _ = test_branch_prints "abstract_boolean.lua"
+let%test_unit _ = test_branch_prints "abstract_boolean_no_call.lua" false
+let%test_unit _ = test_branch_prints "abstract_boolean.lua" false
+let%test_unit _ = test_branch_prints "vector.lua" true
 let%test_unit _ = test_branch_count "branching_with_irrelevant_locals.lua" 1
 let%test_unit _ = test_branch_count "branching_with_allocations.lua" 1
 let%test_unit _ = test_branch_count "branching_into_return.lua" 1
