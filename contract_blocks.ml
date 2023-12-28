@@ -40,9 +40,10 @@ let rec contract_blocks (cfg : cfg) : cfg =
       assert (block_b_phi = []);
       let new_block_a =
         {
-          block_b with
           instructions =
             List.concat [ block_a.instructions; block_b.instructions ];
+          terminator = block_b.terminator;
+          hint_normalize = block_a.hint_normalize || block_b.hint_normalize;
         }
       in
       let cfg =

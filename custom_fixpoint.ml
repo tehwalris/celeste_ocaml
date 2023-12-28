@@ -38,6 +38,7 @@ module type Analysis = sig
   val is_empty : data -> bool
   val is_input : vertex -> bool
   val is_output : vertex -> bool
+  val hint_normalize : vertex -> bool
   val join : data -> data -> data
 
   (* accumulated -> potentially_new -> accumulated * actually_new *)
@@ -197,10 +198,9 @@ struct
             G.fold_vertex
               (fun vertex (n, m_data_acc, m_data_new) ->
                 ( (if A.is_input vertex then vertex :: n else n),
-                  (match G.pred g vertex with
-                  | [] when not @@ A.is_output vertex -> m_data_acc
-                  | [ _ ] when not @@ A.is_output vertex -> m_data_acc
-                  | _ -> M.add vertex A.empty m_data_acc),
+                  (if A.is_output vertex || A.hint_normalize vertex then
+                   M.add vertex A.empty m_data_acc
+                  else m_data_acc),
                   M.add vertex
                     (G.succ_e g vertex |> List.to_seq
                     |> Seq.map (fun edge -> (G.E.dst edge, A.empty))

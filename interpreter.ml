@@ -1366,6 +1366,13 @@ let prepare_fixpoint (cfg : Ir.cfg) (fixed_env_ref : fixed_env ref) =
 
         let is_input v = v = Block_flow.BeforeEntryBlock
         let is_output = function Block_flow.Return -> true | _ -> false
+
+        let hint_normalize = function
+          | Block_flow.BeforeEntryBlock -> cfg.entry.hint_normalize
+          | Block_flow.BeforeNamedBlock name ->
+              (List.assoc name cfg.named).hint_normalize
+          | _ -> false
+
         let untimed_join = Flow.lift_join StateAndMaybeReturnSet.union
 
         let join a b =
@@ -1438,7 +1445,12 @@ let prepare_cfg (cfg : Ir.cfg) (fixed_env_ref : fixed_env ref) : prepared_cfg =
     is_noop =
       (match cfg with
       | {
-       entry = { instructions = []; terminator = _, Ir.Ret None };
+       entry =
+         {
+           instructions = [];
+           terminator = _, Ir.Ret None;
+           hint_normalize = false;
+         };
        named = _;
       } ->
           true

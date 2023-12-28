@@ -4,9 +4,12 @@ let rec iterate_until_stable (f : 'a -> 'a) (x : 'a) : 'a =
   let x' = f x in
   if x' = x then x else iterate_until_stable f x'
 
+type hint = Normalize [@@deriving show]
+
 type stream_el =
   | L of Ir.label
   | I of Ir.local_id * Ir.instruction
+  | H of hint
   | T of Ir.local_id * Ir.terminator
   | F of Ir.fun_def
 [@@deriving show]
@@ -23,17 +26,28 @@ let unsupported_ast ast =
   failwith "unsupported AST"
 
 let cfg_of_stream (code : stream) : Ir.cfg * Ir.fun_def list =
-  let make_block instructions terminator : Ir.block =
-    { instructions; terminator = Option.get terminator }
+  let make_block instructions terminator hint_normalize : Ir.block =
+    { instructions; terminator = Option.get terminator; hint_normalize }
   in
-  let unused_instructions, unused_terminator, named_blocks, fun_defs =
+  let ( unused_instructions,
+        unused_terminator,
+        unused_hint_normalize,
+        named_blocks,
+        fun_defs ) =
     List.fold_left
-      (fun (unused_instructions, unused_terminator, named_blocks, fun_defs) el ->
+      (fun ( unused_instructions,
+             unused_terminator,
+             unused_hint_normalize,
+             named_blocks,
+             fun_defs ) el ->
         match el with
         | L label ->
             ( [],
               None,
-              (label, make_block unused_instructions unused_terminator)
+              false,
+              ( label,
+                make_block unused_instructions unused_terminator
+                  unused_hint_normalize )
               :: named_blocks,
               fun_defs )
         | I (id, instruction) ->
@@ -44,6 +58,14 @@ let cfg_of_stream (code : stream) : Ir.cfg * Ir.fun_def list =
             assert (Option.is_some unused_terminator);
             ( (id, instruction) :: unused_instructions,
               unused_terminator,
+              unused_hint_normalize,
+              named_blocks,
+              fun_defs )
+        | H Normalize ->
+            assert (Option.is_some unused_terminator);
+            ( unused_instructions,
+              unused_terminator,
+              true,
               named_blocks,
               fun_defs )
         | T (id, terminator) ->
@@ -53,17 +75,24 @@ let cfg_of_stream (code : stream) : Ir.cfg * Ir.fun_def list =
                 (Ir.show_terminator @@ snd @@ Option.get unused_terminator)
                 (show_stream code);
             assert (Option.is_none unused_terminator);
-            (unused_instructions, Some (id, terminator), named_blocks, fun_defs)
+            assert (not unused_hint_normalize);
+            ( unused_instructions,
+              Some (id, terminator),
+              unused_hint_normalize,
+              named_blocks,
+              fun_defs )
         | F fun_def ->
             ( unused_instructions,
               unused_terminator,
+              unused_hint_normalize,
               named_blocks,
               fun_def :: fun_defs ))
-      ([], None, [], []) code
+      ([], None, false, [], []) code
   in
   ( Contract_blocks.contract_blocks
       {
-        entry = make_block unused_instructions unused_terminator;
+        entry =
+          make_block unused_instructions unused_terminator unused_hint_normalize;
         named = named_blocks;
       },
     fun_defs )
@@ -380,6 +409,7 @@ and compile_statement (c : Ctxt.t) (break_label : Ir.label option) (stmt : ast)
           Lnames (Elist [ Ident lhs_name ]);
           Assign (Elist [ Ident lhs_name ], Elist [ rhs_expr ]);
         ]
+  | Clist [ Ident "__hint_normalize"; Args (Elist []) ] -> (c, [ H Normalize ])
   | Clist _ ->
       let _, _, stream = compile_rhs_expression c stmt None in
       (c, stream)

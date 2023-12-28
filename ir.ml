@@ -30,6 +30,7 @@ type terminator =
 type block = {
   instructions : (local_id * instruction) list;
   terminator : local_id * terminator;
+  hint_normalize : bool;
 }
 [@@deriving show]
 
