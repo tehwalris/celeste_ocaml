@@ -117,13 +117,15 @@ let map_vector (f : scalar_value -> scalar_value) vec =
   vec |> seq_of_vector |> Seq.map f |> value_of_non_empty_seq
 
 let filter_vector (mask : bool Array.t) vec =
+  incr_mut Perf.global_counters.filter_vector;
   assert (Array.length mask = length_of_vector vec);
   let mask_true_count =
     Array.fold_left (fun acc v -> if v then acc + 1 else acc) 0 mask
   in
   if Array.length mask = mask_true_count then Some (Vector vec)
   else if mask_true_count = 0 then None
-  else
+  else (
+    incr_mut Perf.global_counters.filter_vector_real;
     let indices =
       mask |> Array.to_seq
       |> Seq.mapi (fun i b -> if b then Some i else None)
@@ -131,7 +133,7 @@ let filter_vector (mask : bool Array.t) vec =
       |> Array.of_seq
     in
     assert (Array.length indices = mask_true_count);
-    Some (vector_extract_by_indices indices vec)
+    Some (vector_extract_by_indices indices vec))
 
 let map2_vector (f : scalar_value -> scalar_value -> scalar_value) vec1 vec2 =
   let length1 = length_of_vector vec1 in
@@ -927,10 +929,13 @@ let debug_states (states : LazyStateSet.t) : string =
 let rec interpret_non_phi_instruction (fixed_env : fixed_env)
     (states : state list) (insn : Ir.instruction) :
     (state * value) list * Ir.label option =
-  incr_mut Perf.global_counters.interpret_non_phi_instruction;
+  Perf.count_and_time Perf.global_counters.interpret_non_phi_instruction
+  @@ fun () ->
   if
     !(Perf.global_counters.enable_printing)
-    && !(Perf.global_counters.interpret_non_phi_instruction) mod 1000 = 0
+    && !(Perf.global_counters.interpret_non_phi_instruction).start_count
+       mod 1000
+       = 0
   then Perf.print_counters ();
   let handle_separately_no_phi (f : state -> state * value) :
       (state * value) list * Ir.label option =
@@ -1278,6 +1283,7 @@ and flow_branch (terminator : Ir.terminator) (flow_target : Ir.label)
           | Scalar SUnknownBool -> Some state
           | Scalar _ -> if flow_target = true_label then Some state else None
           | Vector (VBool vec) ->
+              Perf.count_and_time Perf.global_counters.cbr_filter @@ fun () ->
               assert (Array.length vec = state.vector_size);
               let filter_value = flow_target = true_label in
               let mask = Array.map (fun v -> v = filter_value) vec in
@@ -1336,15 +1342,18 @@ and interpret_cfg (states : LazyStateSet.t) (cfg : prepared_cfg) :
   Option.get @@ cfg.analyze init !debug_prints Block_flow.Return
 
 let prepare_fixpoint (cfg : Ir.cfg) (fixed_env_ref : fixed_env ref) =
-  let lift_no_return (f : LazyStateSet.t -> LazyStateSet.t) = function
+  let lift_no_return (counter : Perf.timed_counter ref)
+      (f : LazyStateSet.t -> LazyStateSet.t) = function
     | StateAndMaybeReturnSet.StateSet states ->
+        Perf.count_and_time counter @@ fun () ->
         StateAndMaybeReturnSet.StateSet (f states)
     | StateAndMaybeReturnSet.StateAndReturnSet _ ->
         failwith "Return value in unexpected part of CFG"
   in
-  let lift_return_out_only (f : LazyStateSet.t -> StateAndMaybeReturnSet.t) =
-    function
-    | StateAndMaybeReturnSet.StateSet states -> f states
+  let lift_return_out_only (counter : Perf.timed_counter ref)
+      (f : LazyStateSet.t -> StateAndMaybeReturnSet.t) = function
+    | StateAndMaybeReturnSet.StateSet states ->
+        Perf.count_and_time counter @@ fun () -> f states
     | StateAndMaybeReturnSet.StateAndReturnSet _ ->
         failwith "Return value in unexpected part of CFG"
   in
@@ -1401,15 +1410,23 @@ let prepare_fixpoint (cfg : Ir.cfg) (fixed_env_ref : fixed_env ref) =
           let inner =
             Block_flow.make_flow_function
               (fun source_block_name target_block ->
-                lift_no_return @@ flow_block_phi source_block_name target_block)
+                lift_no_return Perf.global_counters.flow_analyze_flow_block_phi
+                @@ flow_block_phi source_block_name target_block)
               (fun target_block ->
                 lift_no_return
+                  Perf.global_counters.flow_analyze_flow_block_before_join
                 @@ flow_block_before_join live_variable_analysis target_block)
               (fun block ->
-                lift_no_return @@ flow_block_post_phi !fixed_env_ref block)
+                lift_no_return
+                  Perf.global_counters.flow_analyze_flow_block_post_phi
+                @@ flow_block_post_phi !fixed_env_ref block)
               (fun terminator flow_target ->
-                lift_no_return @@ flow_branch terminator flow_target)
-              (fun terminator -> lift_return_out_only @@ flow_return terminator)
+                lift_no_return Perf.global_counters.flow_analyze_flow_branch
+                @@ flow_branch terminator flow_target)
+              (fun terminator ->
+                lift_return_out_only
+                  Perf.global_counters.flow_analyze_flow_return
+                @@ flow_return terminator)
               cfg
           in
           fun edge data ->

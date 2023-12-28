@@ -26,7 +26,7 @@ type counters = {
   enable_printing : bool ref;
   reset_at : timer ref;
   (* Normal counters *)
-  interpret_non_phi_instruction : int ref;
+  interpret_non_phi_instruction : timed_counter ref;
   handle_separately_no_phi : timed_counter ref;
   builtin_call : int ref;
   closure_call : int ref;
@@ -36,10 +36,19 @@ type counters = {
   flow_join : timed_counter ref;
   flow_accumulate : timed_counter ref;
   flow_analyze : timed_counter ref;
+  flow_analyze_flow_block_phi : timed_counter ref;
+  flow_analyze_flow_block_before_join : timed_counter ref;
+  flow_analyze_flow_block_post_phi : timed_counter ref;
+  flow_analyze_flow_branch : timed_counter ref;
+  flow_analyze_flow_return : timed_counter ref;
   fixpoint : timed_counter ref;
   fixpoint_created_node : int ref;
   fixpoint_created_edge : int ref;
   fixpoint_prepare : timed_counter ref;
+  cbr_filter : timed_counter ref;
+  filter_vector : int ref;
+  filter_vector_real : int ref;
+  (* Counters per Lua function *)
   lua_functions : timed_counter ref list ref;
 }
 [@@deriving show]
@@ -48,7 +57,7 @@ let global_counters : counters =
   {
     enable_printing = ref false;
     reset_at = ref @@ Mtime_clock.counter ();
-    interpret_non_phi_instruction = ref 0;
+    interpret_non_phi_instruction = ref empty_timed_counter;
     handle_separately_no_phi = ref empty_timed_counter;
     builtin_call = ref 0;
     closure_call = ref 0;
@@ -58,10 +67,18 @@ let global_counters : counters =
     flow_join = ref empty_timed_counter;
     flow_accumulate = ref empty_timed_counter;
     flow_analyze = ref empty_timed_counter;
+    flow_analyze_flow_block_phi = ref empty_timed_counter;
+    flow_analyze_flow_block_before_join = ref empty_timed_counter;
+    flow_analyze_flow_block_post_phi = ref empty_timed_counter;
+    flow_analyze_flow_branch = ref empty_timed_counter;
+    flow_analyze_flow_return = ref empty_timed_counter;
     fixpoint = ref empty_timed_counter;
     fixpoint_created_node = ref 0;
     fixpoint_created_edge = ref 0;
     fixpoint_prepare = ref empty_timed_counter;
+    cbr_filter = ref empty_timed_counter;
+    filter_vector = ref 0;
+    filter_vector_real = ref 0;
     lua_functions = ref [];
   }
 
@@ -87,8 +104,8 @@ let print_counters () =
   Printf.printf "Performance counters (%f seconds total):\n"
   @@ secs_of_span
   @@ Mtime_clock.count !(global_counters.reset_at);
-  Printf.printf "  interpret_non_phi_instruction: %d\n"
-    !(global_counters.interpret_non_phi_instruction);
+  Printf.printf "  interpret_non_phi_instruction: %s\n"
+  @@ show_timed_counter !(global_counters.interpret_non_phi_instruction);
   Printf.printf "  handle_separately_no_phi: %s\n"
   @@ show_timed_counter !(global_counters.handle_separately_no_phi);
   Printf.printf "  builtin_call: %d\n" !(global_counters.builtin_call);
@@ -103,6 +120,16 @@ let print_counters () =
   @@ show_timed_counter !(global_counters.flow_accumulate);
   Printf.printf "  flow_analyze: %s\n"
   @@ show_timed_counter !(global_counters.flow_analyze);
+  Printf.printf "  flow_analyze_flow_block_phi: %s\n"
+  @@ show_timed_counter !(global_counters.flow_analyze_flow_block_phi);
+  Printf.printf "  flow_analyze_flow_block_before_join: %s\n"
+  @@ show_timed_counter !(global_counters.flow_analyze_flow_block_before_join);
+  Printf.printf "  flow_analyze_flow_block_post_phi: %s\n"
+  @@ show_timed_counter !(global_counters.flow_analyze_flow_block_post_phi);
+  Printf.printf "  flow_analyze_flow_branch: %s\n"
+  @@ show_timed_counter !(global_counters.flow_analyze_flow_branch);
+  Printf.printf "  flow_analyze_flow_return: %s\n"
+  @@ show_timed_counter !(global_counters.flow_analyze_flow_return);
   Printf.printf "  fixpoint %s\n"
   @@ show_timed_counter !(global_counters.fixpoint);
   Printf.printf "  fixpoint_created_node: %d\n"
@@ -111,6 +138,11 @@ let print_counters () =
     !(global_counters.fixpoint_created_edge);
   Printf.printf "  fixpoint_prepare: %s\n"
   @@ show_timed_counter !(global_counters.fixpoint_prepare);
+  Printf.printf "  cbr_filter: %s\n"
+  @@ show_timed_counter !(global_counters.cbr_filter);
+  Printf.printf "  filter_vector: %d\n" !(global_counters.filter_vector);
+  Printf.printf "  filter_vector_real: %d\n"
+    !(global_counters.filter_vector_real);
   Printf.printf "%!"
 
 let print_named_counters (counters : (string * timed_counter) list) =
@@ -129,7 +161,7 @@ let print_named_counters (counters : (string * timed_counter) list) =
 
 let reset_counters () =
   global_counters.reset_at := Mtime_clock.counter ();
-  global_counters.interpret_non_phi_instruction := 0;
+  global_counters.interpret_non_phi_instruction := empty_timed_counter;
   global_counters.handle_separately_no_phi := empty_timed_counter;
   global_counters.builtin_call := 0;
   global_counters.closure_call := 0;
@@ -139,10 +171,18 @@ let reset_counters () =
   global_counters.flow_join := empty_timed_counter;
   global_counters.flow_accumulate := empty_timed_counter;
   global_counters.flow_analyze := empty_timed_counter;
+  global_counters.flow_analyze_flow_block_phi := empty_timed_counter;
+  global_counters.flow_analyze_flow_block_before_join := empty_timed_counter;
+  global_counters.flow_analyze_flow_block_post_phi := empty_timed_counter;
+  global_counters.flow_analyze_flow_branch := empty_timed_counter;
+  global_counters.flow_analyze_flow_return := empty_timed_counter;
   global_counters.fixpoint := empty_timed_counter;
   global_counters.fixpoint_created_node := 0;
   global_counters.fixpoint_created_edge := 0;
   global_counters.fixpoint_prepare := empty_timed_counter;
+  global_counters.cbr_filter := empty_timed_counter;
+  global_counters.filter_vector := 0;
+  global_counters.filter_vector_real := 0;
   List.iter (fun c -> c := empty_timed_counter) !(global_counters.lua_functions)
 
 let count_and_time (c : timed_counter ref) f =
