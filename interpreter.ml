@@ -39,9 +39,7 @@ let vector_compare_indices vec i j =
     match vec with
     | VNumber a -> Pico_number.compare a.(i) a.(j)
     | VBool a -> compare a.(i) a.(j)
-  with exn ->
-    Printf.printf "DEBUG i=%d j=%d (length %d)\n" i j (length_of_vector vec);
-    raise exn
+  with exn -> raise exn
 
 let vector_extract_by_indices indices vec =
   match vec with
@@ -384,10 +382,6 @@ let state_assert_vector_lengths (state : state) =
          | Scalar s -> Scalar s
          | Vector vec ->
              let l = length_of_vector vec in
-             let example = example_of_vector vec in
-             Printf.printf "DEBUG A l=%d, state.vector_size=%d, example=%s\n" l
-               state.vector_size
-               (show_scalar_value example);
              assert (l > 1);
              assert (l = state.vector_size);
              Vector vec)
@@ -710,7 +704,6 @@ let dedup_vectorized_state (state : state) : state =
   in
 
   let old_vector_values = unpack_state_vector_values state in
-  Printf.printf "DEBUG B state.vector_size %d\n" state.vector_size;
   let sorted_indices =
     List.sort_uniq
       (lexicographic_compare_indices
@@ -759,12 +752,6 @@ let vectorize_states (states : LazyStateSet.t) : LazyStateSet.t =
     else failwith "values are not equal and not vectorizable"
   in
   let vectorize_same_shape_states shape states =
-    Printf.printf
-      "DEBUG vectorizing %d states (vectorize_same_shape_states, \
-       shape.vector_size=%d, state[i].vector_size=[%s])\n"
-      (List.length states) shape.vector_size
-      (String.concat ", "
-      @@ List.map (fun state -> string_of_int state.vector_size) states);
     List.iter state_assert_vector_lengths states;
     let vectorized_state =
       {
