@@ -9,12 +9,10 @@ let make_number_number_builtin f : builtin_fun =
   fun state args ->
     match args with
     | [ Scalar a; Scalar b ] -> (state, Scalar (f_scalar a b))
-    | [ Scalar a; Vector b ] ->
-        (state, Vector (map_vector (fun b -> f_scalar a b) b))
-    | [ Vector a; Scalar b ] ->
-        (state, Vector (map_vector (fun a -> f_scalar a b) a))
+    | [ Scalar a; Vector b ] -> (state, map_vector (fun b -> f_scalar a b) b)
+    | [ Vector a; Scalar b ] -> (state, map_vector (fun a -> f_scalar a b) a)
     | [ Vector a; Vector b ] ->
-        (state, Vector (map2_vector (fun a b -> f_scalar a b) a b))
+        (state, map2_vector (fun a b -> f_scalar a b) a b)
     | _ -> failwith "Wrong args"
 
 let make_number_builtin f : builtin_fun =
@@ -26,7 +24,7 @@ let make_number_builtin f : builtin_fun =
   fun state args ->
     match args with
     | [ Scalar a ] -> (state, Scalar (f_scalar a))
-    | [ Vector a ] -> (state, Vector (map_vector f_scalar a))
+    | [ Vector a ] -> (state, map_vector f_scalar a)
     | _ -> failwith "Wrong args"
 
 (* Level 1 *)
@@ -56,12 +54,12 @@ let builtin_new_vector : builtin_fun =
            | HValue (Vector _) -> failwith "Cannot make vector of vector values"
            | _ ->
                failwith "Value is of a type that can not be stored in a local")
-    |> vector_of_non_empty_seq
+    |> value_of_non_empty_seq
   in
-  let vector_size = length_of_vector vec in
+  let vector_size = vec |> seq_of_value 1 |> Seq.length in
   assert (vector_size > 1);
   assert (state.vector_size = 1 || state.vector_size = vector_size);
-  ({ state with vector_size }, Vector vec)
+  ({ state with vector_size }, vec)
 
 let rec print_to_string arg =
   match arg with

@@ -22,17 +22,31 @@ type scalar_value =
 
 type vector_value = VNumber of Pico_number.t Array.t | VBool of bool Array.t
 
-let show_vector_value = function
-  | VNumber a -> Printf.sprintf "VNumber[%d]" @@ Array.length a
-  | VBool a -> Printf.sprintf "VBool[%d]" @@ Array.length a
+let seq_of_vector = function
+  | VNumber a -> a |> Array.to_seq |> Seq.map (fun v -> SNumber v)
+  | VBool a -> a |> Array.to_seq |> Seq.map (fun v -> SBool v)
+
+let show_vector_value vec =
+  let s =
+    vec |> seq_of_vector |> Seq.map show_scalar_value |> List.of_seq
+    |> String.concat ", "
+  in
+  match vec with
+  | VNumber _ -> Printf.sprintf "VNumber[%s]" s
+  | VBool _ -> Printf.sprintf "VBool[%s]" s
 
 let pp_vector_value fmt v = Format.pp_print_string fmt @@ show_vector_value v
 
 type value = Scalar of scalar_value | Vector of vector_value [@@deriving show]
 
-let length_of_vector = function
+let length_of_vector_unchecked = function
   | VNumber a -> Array.length a
   | VBool a -> Array.length a
+
+let length_of_vector vec =
+  let l = length_of_vector_unchecked vec in
+  assert (l > 1);
+  l
 
 let vector_compare_indices vec i j =
   try
@@ -41,22 +55,33 @@ let vector_compare_indices vec i j =
     | VBool a -> compare a.(i) a.(j)
   with exn -> raise exn
 
-let vector_extract_by_indices indices vec =
-  match vec with
-  | VNumber a ->
-      let a' = Array.init (Array.length indices) (fun i -> a.(indices.(i))) in
-      VNumber a'
-  | VBool a ->
-      let a' = Array.init (Array.length indices) (fun i -> a.(indices.(i))) in
-      VBool a'
+let value_unvectorize_if_possible (value : value) : value =
+  (* TODO I guess you could unvectorize if all values are equal (regardless of
+     length), but I'm not sure that it's worth it*)
+  match value with
+  | Scalar _ -> value
+  | Vector vec ->
+      if length_of_vector_unchecked vec = 1 then
+        match vec with
+        | VNumber a -> Scalar (SNumber a.(0))
+        | VBool a -> Scalar (SBool a.(0))
+      else value
 
-let seq_of_vector = function
-  | VNumber a -> a |> Array.to_seq |> Seq.map (fun v -> SNumber v)
-  | VBool a -> a |> Array.to_seq |> Seq.map (fun v -> SBool v)
+let vector_extract_by_indices indices vec =
+  let extracted =
+    match vec with
+    | VNumber a ->
+        VNumber (Array.init (Array.length indices) (fun i -> a.(indices.(i))))
+    | VBool a ->
+        VBool (Array.init (Array.length indices) (fun i -> a.(indices.(i))))
+  in
+  Vector extracted |> value_unvectorize_if_possible
 
 let seq_of_value broadcast_length = function
   | Scalar s -> Seq.repeat s |> Seq.take broadcast_length
-  | Vector v -> seq_of_vector v
+  | Vector v ->
+      assert (length_of_vector v = broadcast_length);
+      seq_of_vector v
 
 let example_of_vector vec =
   vec |> seq_of_vector |> Seq.uncons |> Option.get |> fst
@@ -67,42 +92,41 @@ let can_vectorize_value = function
   | Scalar s -> can_vectorize_scalar_value s
   | Vector vec -> can_vectorize_scalar_value @@ example_of_vector vec
 
-let vector_of_seq_example seq scalar_example =
-  let fail_mixed () = failwith "Cannot build vector of mixed types" in
-  match scalar_example with
-  | SNumber _ ->
-      VNumber
-        (seq
-        |> Seq.map (function SNumber n -> n | _ -> fail_mixed ())
-        |> Array.of_seq)
-  | SBool _ ->
-      VBool
-        (seq
-        |> Seq.map (function SBool b -> b | _ -> fail_mixed ())
-        |> Array.of_seq)
-  | _ ->
-      assert (not @@ can_vectorize_scalar_value scalar_example);
-      failwith
-      @@ Printf.sprintf "Cannot build vector from %s"
-      @@ show_scalar_value scalar_example
+let value_of_non_empty_seq seq =
+  let vector_of_seq_example seq scalar_example =
+    let fail_mixed () = failwith "Cannot build vector of mixed types" in
+    match scalar_example with
+    | SNumber _ ->
+        VNumber
+          (seq
+          |> Seq.map (function SNumber n -> n | _ -> fail_mixed ())
+          |> Array.of_seq)
+    | SBool _ ->
+        VBool
+          (seq
+          |> Seq.map (function SBool b -> b | _ -> fail_mixed ())
+          |> Array.of_seq)
+    | _ ->
+        assert (not @@ can_vectorize_scalar_value scalar_example);
+        failwith
+        @@ Printf.sprintf "Cannot build vector from %s"
+        @@ show_scalar_value scalar_example
+  in
 
-let vector_of_non_empty_seq seq =
   let scalar_example, _ = Option.get @@ Seq.uncons seq in
-  vector_of_seq_example seq scalar_example
+  Vector (vector_of_seq_example seq scalar_example)
+  |> value_unvectorize_if_possible
 
 let map_vector (f : scalar_value -> scalar_value) vec =
-  let length = length_of_vector vec in
-  if length = 0 then vec
-  else seq_of_vector vec |> Seq.map f |> vector_of_non_empty_seq
+  vec |> seq_of_vector |> Seq.map f |> value_of_non_empty_seq
 
-let filter_vector (mask : bool Array.t) (mask_true_count : int) vec =
+let filter_vector (mask : bool Array.t) vec =
   assert (Array.length mask = length_of_vector vec);
-  assert (Array.length mask >= mask_true_count);
-  assert (mask_true_count >= 1);
-  if Array.length mask = mask_true_count then (
-    assert (mask_true_count > 1);
-    assert (Array.for_all (fun b -> b) mask);
-    Vector vec)
+  let mask_true_count =
+    Array.fold_left (fun acc v -> if v then acc + 1 else acc) 0 mask
+  in
+  if Array.length mask = mask_true_count then Some (Vector vec)
+  else if mask_true_count = 0 then None
   else
     let indices =
       mask |> Array.to_seq
@@ -111,26 +135,16 @@ let filter_vector (mask : bool Array.t) (mask_true_count : int) vec =
       |> Array.of_seq
     in
     assert (Array.length indices = mask_true_count);
-    let filtered_vec = vector_extract_by_indices indices vec in
-    if mask_true_count = 1 then
-      match seq_of_vector filtered_vec |> List.of_seq with
-      | [ v ] -> Scalar v
-      | _ -> failwith "expected scalar"
-    else Vector filtered_vec
+    Some (vector_extract_by_indices indices vec)
 
 let map2_vector (f : scalar_value -> scalar_value -> scalar_value) vec1 vec2 =
   let length1 = length_of_vector vec1 in
   let length2 = length_of_vector vec2 in
   assert (length1 = length2);
-  if length1 = 0 || length2 = 0 then vec1
-  else
-    let mapped_seq =
-      seq_of_vector vec1
-      |> Seq.zip (seq_of_vector vec2)
-      |> Seq.map (fun (v1, v2) -> f v1 v2)
-    in
-    let scalar_example, _ = Option.get @@ Seq.uncons mapped_seq in
-    vector_of_seq_example mapped_seq scalar_example
+  seq_of_vector vec1
+  |> Seq.zip (seq_of_vector vec2)
+  |> Seq.map (fun (v1, v2) -> f v1 v2)
+  |> value_of_non_empty_seq
 
 module ListForArrayTable = struct
   type t = heap_id Array.t
@@ -667,7 +681,7 @@ let unpack_state_vector_values (state : state) : vector_value list =
   List.rev !vector_values
 
 let pack_state_vector_values (state : state) (old_values : vector_value list)
-    (new_values : vector_value list) : state =
+    (new_values : value list) : state =
   let old_values = ref old_values in
   let new_values = ref new_values in
   state_map_values
@@ -689,7 +703,7 @@ let pack_state_vector_values (state : state) (old_values : vector_value list)
             | [] -> assert false
           in
           assert (old_value == called_value);
-          Vector new_value
+          new_value
       | _ -> v)
     state
 
@@ -711,11 +725,11 @@ let dedup_vectorized_state (state : state) : state =
       (List.init state.vector_size (fun i -> i))
     |> Array.of_list
   in
-  let new_vector_values =
+  let new_values =
     old_vector_values |> List.map (vector_extract_by_indices sorted_indices)
   in
   {
-    (pack_state_vector_values state old_vector_values new_vector_values) with
+    (pack_state_vector_values state old_vector_values new_values) with
     vector_size = Array.length sorted_indices;
   }
 
@@ -724,16 +738,9 @@ let are_all_list_values_equal (l : 'a list) : bool =
   | [] -> true
   | first :: rest -> List.for_all (fun v -> v = first) rest
 
-let unvectorize_if_possible (state : state) : state =
-  (* TODO I guess you could unvectorize if all values are equal (regardless of
-     length), but I'm not sure that it's worth it*)
+let state_unvectorize_if_possible (state : state) : state =
   if state.vector_size = 1 then
-    state_map_values
-      (fun v ->
-        match v |> seq_of_value 1 |> List.of_seq with
-        | [ v ] -> Scalar v
-        | _ -> assert false)
-      state
+    state_map_values value_unvectorize_if_possible state
   else state
 
 let vectorize_states (states : LazyStateSet.t) : LazyStateSet.t =
@@ -744,10 +751,9 @@ let vectorize_states (states : LazyStateSet.t) : LazyStateSet.t =
        |> fst)
     in
     if can_vectorize_value example_value then
-      Vector
-        (values |> List.to_seq
-        |> Seq.concat_map (fun (v, vector_size) -> seq_of_value vector_size v)
-        |> vector_of_non_empty_seq)
+      values |> List.to_seq
+      |> Seq.concat_map (fun (v, vector_size) -> seq_of_value vector_size v)
+      |> value_of_non_empty_seq
     else if are_all_list_values_equal (List.map fst values) then example_value
     else failwith "values are not equal and not vectorizable"
   in
@@ -778,7 +784,7 @@ let vectorize_states (states : LazyStateSet.t) : LazyStateSet.t =
   |> Seq.map (fun (shape, states) ->
          let vectorized_state =
            vectorize_same_shape_states shape states
-           |> dedup_vectorized_state |> unvectorize_if_possible
+           |> dedup_vectorized_state |> state_unvectorize_if_possible
          in
          state_assert_vector_lengths vectorized_state;
          vectorized_state)
@@ -850,7 +856,7 @@ let interpret_unary_op_scalar (state : state) (op : string) (v : scalar_value) :
 let interpret_unary_op state op v =
   match v with
   | Scalar v -> Scalar (interpret_unary_op_scalar state op v)
-  | Vector v -> Vector (map_vector (interpret_unary_op_scalar state op) v)
+  | Vector v -> map_vector (interpret_unary_op_scalar state op) v
 
 let interpret_binary_op_scalar (l : scalar_value) (op : string)
     (r : scalar_value) : scalar_value =
@@ -906,11 +912,11 @@ let interpret_binary_op l op r =
   match (l, r) with
   | Scalar l, Scalar r -> Scalar (interpret_binary_op_scalar l op r)
   | Scalar l, Vector r ->
-      Vector (map_vector (fun r -> interpret_binary_op_scalar l op r) r)
+      map_vector (fun r -> interpret_binary_op_scalar l op r) r
   | Vector l, Scalar r ->
-      Vector (map_vector (fun l -> interpret_binary_op_scalar l op r) l)
+      map_vector (fun l -> interpret_binary_op_scalar l op r) l
   | Vector l, Vector r ->
-      Vector (map2_vector (fun l r -> interpret_binary_op_scalar l op r) l r)
+      map2_vector (fun l r -> interpret_binary_op_scalar l op r) l r
 
 let debug_states (states : LazyStateSet.t) : string =
   if LazyStateSet.has_normalized_elements states then "normalized"
@@ -1039,7 +1045,13 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                 if Pico_number.fraction_int_of i <> 0 then
                   failwith "Index is a scalar number, but not an integer";
                 Pico_number.int_of i
-            | _ -> failwith "Index is not a scalar number"
+            | v ->
+                Printf.printf "DEBUG %s\n" @@ show_value v;
+                (match v with
+                | Scalar _ -> ()
+                | Vector v ->
+                    Printf.printf "DEBUG length %d\n" @@ length_of_vector v);
+                failwith "Index is not a scalar number"
           in
           let old_fields =
             match Heap.find table_heap_id state.heap with
@@ -1276,19 +1288,16 @@ and flow_branch (terminator : Ir.terminator) (flow_target : Ir.label)
               let mask_true_count =
                 Array.fold_left (fun acc v -> if v then acc + 1 else acc) 0 mask
               in
-              if mask_true_count = state.vector_size then Some state
-              else if mask_true_count = 0 then None
-              else (
-                assert (
-                  mask_true_count > 0 && mask_true_count < state.vector_size);
+              if mask_true_count = 0 then None
+              else
                 let filtered_state =
                   state_map_values
                     (function
                       | Scalar s -> Scalar s
-                      | Vector vec -> filter_vector mask mask_true_count vec)
+                      | Vector vec -> Option.get @@ filter_vector mask vec)
                     state
                 in
-                Some { filtered_state with vector_size = mask_true_count })
+                Some { filtered_state with vector_size = mask_true_count }
           | Vector _ -> failwith "cbr on vector of non-bool values")
         states
   | _ -> failwith "Unexpected flow"
