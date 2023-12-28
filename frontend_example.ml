@@ -45,7 +45,7 @@ let print_step states =
   Printf.printf "\n%!"
 
 let () =
-  let lua_code = BatFile.with_file_in "celeste-room-2.lua" BatIO.read_all in
+  let lua_code = BatFile.with_file_in "celeste-minimal.lua" BatIO.read_all in
   let ast =
     Lua_parser.Parse.parse_from_string
     @@ String.concat "\n"
@@ -81,7 +81,7 @@ let () =
   let states = ref @@ Interpreter.LazyStateSet.of_list [ initial_state ] in
   states := run_step cfg !states !fixed_env_ref;
   print_step !states;
-  for i = 1 to 100 do
+  for i = 1 to 1000 do
     Printf.printf "Frame %d\n%!" i;
     states := run_step frame_cfg !states !fixed_env_ref;
     print_step !states

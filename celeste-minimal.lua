@@ -26,7 +26,12 @@ k_dash=5
 -----------------
 
 function _init()
-	title_screen()
+	-- title_screen()
+
+	frames = 0
+	deaths = 0
+	max_djump = 1
+	load_room(1, 0)
 end
 
 function title_screen()
@@ -106,9 +111,6 @@ player =
 		elseif this.grace > 0 then
 		 this.grace = this.grace - (1)
 		end
-
-		sign_split(this.spd.x)
-		sign_split(this.spd.y)
 
 		this.dash_effect_time = this.dash_effect_time - (1)
   if this.dash_time > 0 then
@@ -197,9 +199,6 @@ player =
 		 		this.spd.x=(this.flip.x and -1 or 1)
 		  	this.spd.y=0
 		 	end
-
-			sign_split(this.spd.x)
-			sign_split(this.spd.y)
 		 	
 		 	freeze=2
 		 	this.dash_target.x=2*sign(this.spd.x)
@@ -637,14 +636,12 @@ function init_object(type,x,y)
 		local amount
 		-- [x] get move amount
  	obj.rem.x = obj.rem.x + (ox)
-	  pre_flr_split(obj.rem.x)
 		amount = flr(obj.rem.x + 0.5)
 		obj.rem.x = obj.rem.x - (amount)
 		obj.move_x(amount,0)
 		
 		-- [y] get move amount
 		obj.rem.y = obj.rem.y + (oy)
-	  pre_flr_split(obj.rem.y)
 		amount = flr(obj.rem.y + 0.5)
 		obj.rem.y = obj.rem.y - (amount)
 		obj.move_y(amount)
@@ -849,8 +846,7 @@ function ice_at(x,y,w,h)
  return tile_flag_at(x,y,w,h,4)
 end
 
--- TODO HACK replaced by builtin for performance
---[[ function tile_flag_at(x,y,w,h,flag)
+function tile_flag_at(x,y,w,h,flag)
  for i=max(0,flr(x/8)),min(15,(x+w-1)/8) do
  	for j=max(0,flr(y/8)),min(15,(y+h-1)/8) do
  		if fget(tile_at(i,j),flag) then
@@ -859,7 +855,7 @@ end
  	end
  end
 	return false
-end ]]
+end
 
 function tile_at(x,y)
  return mget(room.x * 16 + x, room.y * 16 + y)

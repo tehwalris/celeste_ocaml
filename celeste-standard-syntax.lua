@@ -1129,7 +1129,6 @@ function load_room(x,y)
 
 	-- entities
 	for tx=0,15 do
-		__debug("tx", tx)
 		for ty=0,15 do
 			local tile = mget(room.x*16+tx,room.y*16+ty);
 			if tile==11 then
