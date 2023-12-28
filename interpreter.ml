@@ -20,28 +20,37 @@ type scalar_value =
   | SNilPointer of string
 [@@deriving show]
 
-type vector_value = VNumber of Pico_number.t Array.t
+type vector_value = VNumber of Pico_number.t Array.t | VBool of bool Array.t
 
 let show_vector_value = function
   | VNumber a -> Printf.sprintf "VNumber[%d]" @@ Array.length a
+  | VBool a -> Printf.sprintf "VBool[%d]" @@ Array.length a
 
 let pp_vector_value fmt v = Format.pp_print_string fmt @@ show_vector_value v
 
 type value = Scalar of scalar_value | Vector of vector_value [@@deriving show]
 
-let length_of_vector = function VNumber a -> Array.length a
+let length_of_vector = function
+  | VNumber a -> Array.length a
+  | VBool a -> Array.length a
 
 let vector_compare_indices vec i j =
-  match vec with VNumber a -> Pico_number.compare a.(i) a.(j)
+  match vec with
+  | VNumber a -> Pico_number.compare a.(i) a.(j)
+  | VBool a -> compare a.(i) a.(j)
 
 let vector_extract_by_indices indices vec =
   match vec with
   | VNumber a ->
       let a' = Array.init (Array.length indices) (fun i -> a.(indices.(i))) in
       VNumber a'
+  | VBool a ->
+      let a' = Array.init (Array.length indices) (fun i -> a.(indices.(i))) in
+      VBool a'
 
 let seq_of_vector = function
   | VNumber a -> a |> Array.to_seq |> Seq.map (fun v -> SNumber v)
+  | VBool a -> a |> Array.to_seq |> Seq.map (fun v -> SBool v)
 
 let seq_of_value = function
   | Scalar s -> List.to_seq [ s ]
@@ -63,6 +72,11 @@ let vector_of_seq_example seq scalar_example =
       VNumber
         (seq
         |> Seq.map (function SNumber n -> n | _ -> fail_mixed ())
+        |> Array.of_seq)
+  | SBool _ ->
+      VBool
+        (seq
+        |> Seq.map (function SBool b -> b | _ -> fail_mixed ())
         |> Array.of_seq)
   | _ ->
       assert (not @@ can_vectorize_scalar_value scalar_example);
