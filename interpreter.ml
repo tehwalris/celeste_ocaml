@@ -35,9 +35,13 @@ let length_of_vector = function
   | VBool a -> Array.length a
 
 let vector_compare_indices vec i j =
-  match vec with
-  | VNumber a -> Pico_number.compare a.(i) a.(j)
-  | VBool a -> compare a.(i) a.(j)
+  try
+    match vec with
+    | VNumber a -> Pico_number.compare a.(i) a.(j)
+    | VBool a -> compare a.(i) a.(j)
+  with exn ->
+    Printf.printf "DEBUG i=%d j=%d (length %d)\n" i j (length_of_vector vec);
+    raise exn
 
 let vector_extract_by_indices indices vec =
   match vec with
@@ -52,8 +56,8 @@ let seq_of_vector = function
   | VNumber a -> a |> Array.to_seq |> Seq.map (fun v -> SNumber v)
   | VBool a -> a |> Array.to_seq |> Seq.map (fun v -> SBool v)
 
-let seq_of_value = function
-  | Scalar s -> List.to_seq [ s ]
+let seq_of_value broadcast_length = function
+  | Scalar s -> Seq.repeat s |> Seq.take broadcast_length
   | Vector v -> seq_of_vector v
 
 let example_of_vector vec =
@@ -362,9 +366,38 @@ let normalize_state_maps_except_heap (state : state) : state =
     vector_size = state.vector_size;
   }
 
+let state_map_values (f : value -> value) (state : state) : state =
+  let f_heap_value = function HValue v -> HValue (f v) | v -> v in
+  {
+    heap = Heap.map f_heap_value state.heap;
+    local_env = Ir.LocalIdMap.map f state.local_env;
+    outer_local_envs = List.map (Ir.LocalIdMap.map f) state.outer_local_envs;
+    global_env = state.global_env;
+    prints = state.prints;
+    vector_size = state.vector_size;
+  }
+
+let state_assert_vector_lengths (state : state) =
+  ignore
+  @@ state_map_values
+       (function
+         | Scalar s -> Scalar s
+         | Vector vec ->
+             let l = length_of_vector vec in
+             let example = example_of_vector vec in
+             Printf.printf "DEBUG A l=%d, state.vector_size=%d, example=%s\n" l
+               state.vector_size
+               (show_scalar_value example);
+             assert (l > 1);
+             assert (l = state.vector_size);
+             Vector vec)
+       state
+
 let normalize_state (state : state) : state =
   if !debug_prints then Printf.printf "normalize_state\n";
-  state |> normalize_state_maps_except_heap |> gc_heap
+  let state = state |> normalize_state_maps_except_heap |> gc_heap in
+  state_assert_vector_lengths state;
+  state
 
 module StateSet = Set.Make (struct
   type t = state
@@ -524,13 +557,6 @@ module StateAndMaybeReturnSet = struct
     | StateAndReturnSet a -> StateAndReturnSet.is_empty a
 end
 
-let state_map_values (f : value -> value) (state : state) : state =
-  let f_heap_value = function HValue v -> HValue (f v) | v -> v in
-  {
-    state with
-    heap = Heap.map f_heap_value state.heap (* TODO map other fields *);
-  }
-
 let zip_seq_list (seq_list : 'a Seq.t list) : 'a list Seq.t =
   let rec zip_seq_list_helper (seq_list : 'a Seq.t list) : 'a list Seq.t =
     match seq_list with
@@ -551,8 +577,8 @@ let zip_seq_list (seq_list : 'a Seq.t list) : 'a list Seq.t =
 
   zip_seq_list_helper seq_list
 
-let zip_map_map (f : 'v list -> 'v) (to_seq : 'm -> ('k * 'v) Seq.t)
-    (of_seq : ('k * 'v) Seq.t -> 'm) (maps : 'm list) : 'm =
+let zip_map_map (f : 'va list -> 'vb) (to_seq : 'ma -> ('k * 'va) Seq.t)
+    (of_seq : ('k * 'vb) Seq.t -> 'mb) (maps : 'ma list) : 'm =
   maps |> List.rev_map to_seq |> zip_seq_list
   |> Seq.map (fun kv_list : ('k * 'v) ->
          let k, v_list =
@@ -569,28 +595,49 @@ let zip_map_map (f : 'v list -> 'v) (to_seq : 'm -> ('k * 'v) Seq.t)
          (k, f v_list))
   |> of_seq
 
-let zip_map_state_values (f : value list -> value) (shape : state)
+let zip_map_state_values (f : (value * int) list -> value) (shape : state)
     (states : state list) : state =
-  let f_heap_value (heap_values : heap_value list) : heap_value =
+  let f_heap_value (heap_values : (heap_value * int) list) : heap_value =
     let values =
-      List.map (function HValue v -> Some v | _ -> None) heap_values
+      List.map
+        (function HValue v, vector_size -> Some (v, vector_size) | _ -> None)
+        heap_values
     in
     match values with
     | Some _ :: _ -> HValue (values |> List.map Option.get |> f)
     | None :: _ ->
         assert (List.for_all Option.is_none values);
-        List.hd heap_values
+        heap_values |> List.hd |> fst
     | [] -> assert false
   in
 
+  let lift_to_seq to_seq (to_seq_input, vector_size) =
+    to_seq_input |> to_seq |> Seq.map (fun (k, v) -> (k, (v, vector_size)))
+  in
+  let extract f = List.map (fun state -> (f state, state.vector_size)) states in
+
   {
-    (* TODO don't statrt with shape *)
-    shape with
     heap =
-      zip_map_map f_heap_value Heap.seq_of_old Heap.old_of_seq
-        (List.map (fun state -> state.heap) states);
-    (* TODO map other fields *)
-    (* TODO update vector size *)
+      zip_map_map f_heap_value
+        (lift_to_seq Heap.seq_of_old)
+        Heap.old_of_seq
+        (extract (fun state -> state.heap));
+    local_env =
+      zip_map_map f
+        (lift_to_seq Ir.LocalIdMap.to_seq)
+        Ir.LocalIdMap.of_seq
+        (extract (fun state -> state.local_env));
+    outer_local_envs =
+      List.mapi
+        (fun i _ ->
+          zip_map_map f
+            (lift_to_seq Ir.LocalIdMap.to_seq)
+            Ir.LocalIdMap.of_seq
+            (extract (fun state -> List.nth state.outer_local_envs i)))
+        shape.outer_local_envs;
+    global_env = shape.global_env;
+    prints = shape.prints;
+    vector_size = shape.vector_size;
   }
 
 let rec normalize_value_for_shape = function
@@ -663,6 +710,7 @@ let dedup_vectorized_state (state : state) : state =
   in
 
   let old_vector_values = unpack_state_vector_values state in
+  Printf.printf "DEBUG B state.vector_size %d\n" state.vector_size;
   let sorted_indices =
     List.sort_uniq
       (lexicographic_compare_indices
@@ -684,31 +732,64 @@ let are_all_list_values_equal (l : 'a list) : bool =
   | first :: rest -> List.for_all (fun v -> v = first) rest
 
 let unvectorize_if_possible (state : state) : state =
+  (* TODO I guess you could unvectorize if all values are equal (regardless of
+     length), but I'm not sure that it's worth it*)
   if state.vector_size = 1 then
     state_map_values
       (fun v ->
-        match v |> seq_of_value |> List.of_seq with
+        match v |> seq_of_value 1 |> List.of_seq with
         | [ v ] -> Scalar v
         | _ -> assert false)
       state
   else state
 
 let vectorize_states (states : LazyStateSet.t) : LazyStateSet.t =
-  let vectorize_values (values : value list) : value =
-    let example_value = List.hd values in
-    if can_vectorize_value example_value then
+  let vectorize_values (values : (value * int) list) : value =
+    let example_value =
+      Scalar
+        (values |> List.hd |> fst |> seq_of_value 1 |> Seq.uncons |> Option.get
+       |> fst)
+    in
+    if are_all_list_values_equal values then example_value
+    else if can_vectorize_value example_value then
       Vector
         (values |> List.to_seq
-        |> Seq.concat_map seq_of_value
+        |> Seq.concat_map (fun (v, vector_size) -> seq_of_value vector_size v)
         |> vector_of_non_empty_seq)
-    else (
-      assert (are_all_list_values_equal values);
-      example_value)
+    else failwith "values are not equal and not vectorizable"
   in
   let vectorize_same_shape_states shape states =
-    let vectorized_state = zip_map_state_values vectorize_values shape states in
-    let vector_size = List.fold_left (fun a c -> a + c.vector_size) 0 states in
-    { vectorized_state with vector_size }
+    Printf.printf
+      "DEBUG vectorizing %d states (vectorize_same_shape_states, \
+       shape.vector_size=%d, state[i].vector_size=[%s])\n"
+      (List.length states) shape.vector_size
+      (String.concat ", "
+      @@ List.map (fun state -> string_of_int state.vector_size) states);
+    List.iter state_assert_vector_lengths states;
+    let debug_vectorize_states_limited n =
+      let states = BatList.take n @@ List.rev states in
+      Printf.printf
+        "DEBUG vectorizing %d states (debug_vectorize_states_limited, \
+         shape.vector_size=%d, state[i].vector_size=[%s])\n"
+        (List.length states) shape.vector_size
+        (String.concat ", "
+        @@ List.map (fun state -> string_of_int state.vector_size) states);
+      {
+        (zip_map_state_values vectorize_values shape states) with
+        vector_size = List.fold_left (fun a c -> a + c.vector_size) 0 states;
+      }
+    in
+    for i = 2 to List.length states do
+      let vectorized_state = debug_vectorize_states_limited i in
+      Printf.printf "DEBUG vectorized_state.vector_size %d\n"
+        vectorized_state.vector_size;
+      state_assert_vector_lengths vectorized_state
+    done;
+    let vectorized_state =
+      debug_vectorize_states_limited @@ List.length states
+    in
+    state_assert_vector_lengths vectorized_state;
+    vectorized_state
   in
 
   let states_by_shape =
