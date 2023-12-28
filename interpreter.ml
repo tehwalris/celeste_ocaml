@@ -973,7 +973,7 @@ let debug_states (states : LazyStateSet.t) : string =
 
 let rec interpret_non_phi_instruction (fixed_env : fixed_env)
     (states : state list) (insn : Ir.instruction) :
-    (state * value) list * Ir.label option =
+    (state * value option) list * Ir.label option =
   Perf.count_and_time Perf.global_counters.interpret_non_phi_instruction
   @@ fun () ->
   if
@@ -982,8 +982,8 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
        mod 1000
        = 0
   then Perf.print_counters ();
-  let handle_separately_no_phi (f : state -> state * value) :
-      (state * value) list * Ir.label option =
+  let handle_separately_no_phi (f : state -> state * value option) :
+      (state * value option) list * Ir.label option =
     Perf.count_and_time Perf.global_counters.handle_separately_no_phi
     @@ fun () -> (List.map f states, None)
   in
@@ -997,11 +997,11 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
               heap = Heap.add heap_id (HValue (Scalar (SNil None))) state.heap;
             }
           in
-          (state, Scalar (SPointer heap_id)))
+          (state, Some (Scalar (SPointer heap_id))))
   | GetGlobal (name, create_if_missing) ->
       handle_separately_no_phi (fun state ->
           match StringMap.find_opt name state.global_env with
-          | Some heap_id -> (state, Scalar (SPointer heap_id))
+          | Some heap_id -> (state, Some (Scalar (SPointer heap_id)))
           | None when create_if_missing ->
               let state, heap_id =
                 state_heap_add state (HValue (Scalar (SNil None)))
@@ -1012,22 +1012,24 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                   global_env = StringMap.add name heap_id state.global_env;
                 }
               in
-              (state, Scalar (SPointer heap_id))
+              (state, Some (Scalar (SPointer heap_id)))
           | None ->
-              (state, Scalar (SNilPointer (Printf.sprintf "global %s" name))))
+              ( state,
+                Some (Scalar (SNilPointer (Printf.sprintf "global %s" name))) ))
   | Load local_id ->
       handle_separately_no_phi (fun state ->
           match Ir.LocalIdMap.find local_id state.local_env with
           | Scalar (SPointer heap_id) -> (
               match Heap.find heap_id state.heap with
-              | HValue value -> (state, value)
+              | HValue value -> (state, Some value)
               | _ ->
                   failwith
                     "Value is of a type that can not be stored in a local")
           | Scalar (SNilPointer hint) ->
               ( state,
-                Scalar (SNil (Some (Printf.sprintf "nil pointer to %s" hint)))
-              )
+                Some
+                  (Scalar
+                     (SNil (Some (Printf.sprintf "nil pointer to %s" hint)))) )
           | v -> failwith_not_pointer v)
   | Store (target_local_id, source_local_id) ->
       handle_separately_no_phi (fun state ->
@@ -1038,14 +1040,14 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
           let state =
             state_heap_update state (fun _ -> HValue source_value) heap_id
           in
-          (state, Scalar (SNil None)))
+          (state, None))
   | StoreEmptyTable local_id ->
       handle_separately_no_phi (fun state ->
           let heap_id = heap_id_from_pointer_local state local_id in
           let state =
             state_heap_update state (fun _ -> HUnknownTable) heap_id
           in
-          (state, Scalar (SNil None)))
+          (state, None))
   | StoreClosure (target_local_id, fun_global_id, captured_local_ids) ->
       handle_separately_no_phi (fun state ->
           let heap_id = heap_id_from_pointer_local state target_local_id in
@@ -1059,7 +1061,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
               (fun _ -> HClosure (fun_global_id, captured_values))
               heap_id
           in
-          (state, Scalar (SNil None)))
+          (state, None))
   | GetField (table_local_id, field_name, create_if_missing) ->
       handle_separately_no_phi (fun state ->
           let table_heap_id = heap_id_from_pointer_local state table_local_id in
@@ -1073,7 +1075,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                    table or unknown table"
           in
           match List.assoc_opt field_name old_fields with
-          | Some field_heap_id -> (state, Scalar (SPointer field_heap_id))
+          | Some field_heap_id -> (state, Some (Scalar (SPointer field_heap_id)))
           | None when create_if_missing ->
               let state, field_heap_id =
                 state_heap_add state (HValue (Scalar (SNil None)))
@@ -1084,10 +1086,12 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                     HObjectTable ((field_name, field_heap_id) :: old_fields))
                   table_heap_id
               in
-              (state, Scalar (SPointer field_heap_id))
+              (state, Some (Scalar (SPointer field_heap_id)))
           | None ->
               ( state,
-                Scalar (SNilPointer (Printf.sprintf "field %s" field_name)) ))
+                Some
+                  (Scalar (SNilPointer (Printf.sprintf "field %s" field_name)))
+              ))
   | GetIndex (table_local_id, index_local_id, create_if_missing) ->
       handle_separately_no_phi (fun state ->
           let table_heap_id = heap_id_from_pointer_local state table_local_id in
@@ -1109,7 +1113,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                    or unknown table"
           in
           match ListForArrayTable.nth_opt old_fields (index - 1) with
-          | Some field_heap_id -> (state, Scalar (SPointer field_heap_id))
+          | Some field_heap_id -> (state, Some (Scalar (SPointer field_heap_id)))
           | None when create_if_missing ->
               if index <> ListForArrayTable.length old_fields + 1 then
                 failwith "Index is not the next index in the array";
@@ -1123,17 +1127,18 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                       (ListForArrayTable.append old_fields field_heap_id))
                   table_heap_id
               in
-              (state, Scalar (SPointer field_heap_id))
+              (state, Some (Scalar (SPointer field_heap_id)))
           | None ->
-              (state, Scalar (SNilPointer (Printf.sprintf "index %d" index))))
+              ( state,
+                Some (Scalar (SNilPointer (Printf.sprintf "index %d" index))) ))
   | NumberConstant v ->
-      handle_separately_no_phi (fun state -> (state, Scalar (SNumber v)))
+      handle_separately_no_phi (fun state -> (state, Some (Scalar (SNumber v))))
   | BoolConstant v ->
-      handle_separately_no_phi (fun state -> (state, Scalar (SBool v)))
+      handle_separately_no_phi (fun state -> (state, Some (Scalar (SBool v))))
   | StringConstant v ->
-      handle_separately_no_phi (fun state -> (state, Scalar (SString v)))
+      handle_separately_no_phi (fun state -> (state, Some (Scalar (SString v))))
   | NilConstant ->
-      handle_separately_no_phi (fun state -> (state, Scalar (SNil None)))
+      handle_separately_no_phi (fun state -> (state, Some (Scalar (SNil None))))
   | Call (fun_local_id, arg_local_ids) ->
       let states_by_function =
         List.fold_left
@@ -1162,7 +1167,10 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                    let builtin_fun = List.assoc name fixed_env.builtin_funs in
                    states |> List.to_seq
                    |> Seq.map (fun state ->
-                          builtin_fun state @@ arg_values_of_state state)
+                          let state, result =
+                            builtin_fun state @@ arg_values_of_state state
+                          in
+                          (state, Some result))
                | HClosure (fun_global_id, captured_values) ->
                    Perf.count_and_time Perf.global_counters.closure_call
                    @@ fun () ->
@@ -1174,7 +1182,8 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                    if fun_cfg.is_noop then (
                      incr_mut Perf.global_counters.closure_call_noop;
                      states |> List.to_seq
-                     |> Seq.map (fun state -> (state, Scalar (SNil None))))
+                     |> Seq.map (fun state ->
+                            (state, Some (Scalar (SNil None)))))
                    else
                      let inner_states =
                        Perf.count_and_time
@@ -1252,7 +1261,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                                 vector_size = inner_state.vector_size;
                               }
                             in
-                            (state, return_value))
+                            (state, Some return_value))
                | _ -> failwith "Calling something that's not a function")
         |> List.of_seq
       in
@@ -1260,12 +1269,12 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
   | UnaryOp (op, local_id) ->
       handle_separately_no_phi (fun state ->
           let value = Ir.LocalIdMap.find local_id state.local_env in
-          (state, interpret_unary_op state op value))
+          (state, Some (interpret_unary_op state op value)))
   | BinaryOp (left_local_id, op, right_local_id) ->
       handle_separately_no_phi (fun state ->
           let left_value = Ir.LocalIdMap.find left_local_id state.local_env in
           let right_value = Ir.LocalIdMap.find right_local_id state.local_env in
-          (state, interpret_binary_op left_value op right_value))
+          (state, Some (interpret_binary_op left_value op right_value)))
   | Phi _ -> failwith "Phi nodes should be handled by phi_block_flow"
 
 and flow_block_phi (source_block_name : Ir.label) (target_block : Ir.block)
@@ -1334,10 +1343,13 @@ and flow_block_post_phi (fixed_env : fixed_env) (block : Ir.block)
         let results, _ = interpret_non_phi_instruction fixed_env states insn in
         List.map
           (fun (state, value) ->
-            {
-              state with
-              local_env = Ir.LocalIdMap.add local_id value state.local_env;
-            })
+            match value with
+            | Some value ->
+                {
+                  state with
+                  local_env = Ir.LocalIdMap.add local_id value state.local_env;
+                }
+            | None -> state)
           results)
       states non_phi_instructions
   in
