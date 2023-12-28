@@ -552,6 +552,7 @@ let zip_map_state_values (f : value list -> value) (shape : state)
   }
 
 let rec normalize_value_for_shape = function
+  | v when not @@ can_vectorize_value v -> v
   | Scalar (SNumber _) -> Scalar (SNumber (Pico_number.of_int 0))
   | Scalar (SBool _) -> Scalar (SBool false)
   | Scalar SUnknownBool -> Scalar (SBool false)
@@ -580,7 +581,7 @@ let unpack_state_vector_values (state : state) : vector_value list =
              v
          | _ -> v)
        state;
-  !vector_values
+  List.rev !vector_values
 
 let pack_state_vector_values (state : state) (old_values : vector_value list)
     (new_values : vector_value list) : state =

@@ -20,12 +20,11 @@ let run_step cfg states =
   Perf.print_counters ();
   let states =
     match states_and_maybe_returns with
-    | Interpreter.StateAndMaybeReturnSet.StateSet states ->
-        Interpreter.LazyStateSet.normalize states
+    | Interpreter.StateAndMaybeReturnSet.StateSet states -> states
     | Interpreter.StateAndMaybeReturnSet.StateAndReturnSet _ ->
         failwith "Unexpected return value"
   in
-  states
+  states |> Interpreter.LazyStateSet.normalize |> Interpreter.vectorize_states
 
 let print_step states =
   Printf.printf "Got %d states after execution\n"
