@@ -471,7 +471,6 @@ module LazyStateSet = struct
   let normalize (t : t) : t = NormalizedSet (to_normalized_state_set t)
 
   let union (a : t) (b : t) : t =
-    if !debug_prints then Printf.printf "union\n";
     if is_empty a then b
     else if is_empty b then a
     else
@@ -534,27 +533,68 @@ module StateAndReturnSet = Set.Make (struct
   let compare = Stdlib.compare
 end)
 
+module LazyStateAndReturnSet = struct
+  type t =
+    | NormalizedSet of StateAndReturnSet.t
+    | NonNormalizedList of (state * value) list
+
+  let empty = NonNormalizedList []
+
+  let is_empty = function
+    | NormalizedSet set -> StateAndReturnSet.is_empty set
+    | NonNormalizedList [] -> true
+    | NonNormalizedList _ -> false
+
+  let to_non_normalized_non_deduped_seq (t : t) : (state * value) Seq.t =
+    match t with
+    | NormalizedSet set -> StateAndReturnSet.to_seq set
+    | NonNormalizedList list -> List.to_seq list
+
+  let to_normalized_non_deduped_seq (t : t) : (state * value) Seq.t =
+    match t with
+    | NormalizedSet set -> StateAndReturnSet.to_seq set
+    | NonNormalizedList list ->
+        list |> List.to_seq
+        |> Seq.map (fun (state, value) -> (normalize_state state, value))
+
+  let of_list (list : (state * value) list) : t = NonNormalizedList list
+
+  let to_normalized_state_and_return_set (t : t) : StateAndReturnSet.t =
+    match t with
+    | NormalizedSet set -> set
+    | NonNormalizedList _ ->
+        t |> to_normalized_non_deduped_seq |> StateAndReturnSet.of_seq
+
+  let normalize (t : t) : t =
+    NormalizedSet (to_normalized_state_and_return_set t)
+
+  let union (a : t) (b : t) : t =
+    if is_empty a then b
+    else if is_empty b then a
+    else
+      NonNormalizedList
+        (Seq.append
+           (to_non_normalized_non_deduped_seq a)
+           (to_non_normalized_non_deduped_seq b)
+        |> List.of_seq)
+
+  let cardinal_upper_bound (t : t) : int =
+    match t with
+    | NormalizedSet set -> StateAndReturnSet.cardinal set
+    | NonNormalizedList list -> List.length list
+end
+
 module StateAndMaybeReturnSet = struct
   type t =
     | StateSet of LazyStateSet.t
-    | StateAndReturnSet of StateAndReturnSet.t
+    | StateAndReturnSet of LazyStateAndReturnSet.t
 
   let union (a : t) (b : t) : t =
     match (a, b) with
     | StateSet a, StateSet b -> StateSet (LazyStateSet.union a b)
     | StateAndReturnSet a, StateAndReturnSet b ->
-        StateAndReturnSet (StateAndReturnSet.union a b)
+        StateAndReturnSet (LazyStateAndReturnSet.union a b)
     | _ -> failwith "Cannot union StateSet and StateAndReturnSet"
-
-  let state_and_return_set_union_diff (a : StateAndReturnSet.t)
-      (b : StateAndReturnSet.t) : StateAndReturnSet.t * StateAndReturnSet.t =
-    StateAndReturnSet.fold
-      (fun v (union, diff) ->
-        let new_union = StateAndReturnSet.add v union in
-        if new_union == union then (union, diff)
-        else (new_union, StateAndReturnSet.add v diff))
-      a
-      (b, StateAndReturnSet.empty)
 
   (* union_diff a b = (union a b, diff a b) (only when = is Set.equal though)*)
   let union_diff (a : t) (b : t) : t * t =
@@ -562,15 +602,14 @@ module StateAndMaybeReturnSet = struct
     | StateSet a, StateSet b ->
         let union, diff = LazyStateSet.union_diff a b in
         (StateSet union, StateSet diff)
-    | StateAndReturnSet a, StateAndReturnSet b ->
-        let union, diff = state_and_return_set_union_diff a b in
-        (StateAndReturnSet union, StateAndReturnSet diff)
+    | StateAndReturnSet _, StateAndReturnSet _ ->
+        failwith "not implemented (yet?)"
     | _ -> failwith "Cannot union_diff StateSet and StateAndReturnSet"
 
   let is_empty (a : t) : bool =
     match a with
     | StateSet a -> LazyStateSet.is_empty a
-    | StateAndReturnSet a -> StateAndReturnSet.is_empty a
+    | StateAndReturnSet a -> LazyStateAndReturnSet.is_empty a
 end
 
 let zip_seq_list (seq_list : 'a Seq.t list) : 'a list Seq.t =
@@ -1125,7 +1164,8 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                    |> Seq.map (fun state ->
                           builtin_fun state @@ arg_values_of_state state)
                | HClosure (fun_global_id, captured_values) ->
-                   incr_mut Perf.global_counters.closure_call;
+                   Perf.count_and_time Perf.global_counters.closure_call
+                   @@ fun () ->
                    let fun_def, fun_cfg =
                      List.find
                        (fun (fun_def, _) -> fun_def.Ir.name = fun_global_id)
@@ -1137,6 +1177,9 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                      |> Seq.map (fun state -> (state, Scalar (SNil None))))
                    else
                      let inner_states =
+                       Perf.count_and_time
+                         Perf.global_counters.closure_call_prepare_inner_states
+                       @@ fun () ->
                        List.map
                          (fun state ->
                            let arg_values = arg_values_of_state state in
@@ -1182,6 +1225,9 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                          Printf.eprintf "Error in function %s\n" fun_global_id;
                          raise err
                      in
+                     Perf.count_and_time
+                       Perf.global_counters.closure_call_process_inner_results
+                     @@ fun () ->
                      inner_result
                      |> (function
                           | StateAndMaybeReturnSet.StateSet inner_states ->
@@ -1192,7 +1238,8 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                           | StateAndMaybeReturnSet.StateAndReturnSet
                               inner_states_and_returns ->
                               inner_states_and_returns
-                              |> StateAndReturnSet.to_seq)
+                              |> LazyStateAndReturnSet
+                                 .to_non_normalized_non_deduped_seq)
                      |> Seq.map (fun (inner_state, return_value) ->
                             let state =
                               {
@@ -1354,7 +1401,7 @@ and flow_return (terminator : Ir.terminator) (states : LazyStateSet.t) :
         |> Seq.map (fun state ->
                let state = clean_state_after_return (Some local_id) state in
                (state, Ir.LocalIdMap.find local_id state.local_env))
-        |> StateAndReturnSet.of_seq)
+        |> List.of_seq |> LazyStateAndReturnSet.of_list)
   | Ir.Ret None ->
       StateAndMaybeReturnSet.StateSet
         (LazyStateSet.map (clean_state_after_return None) states)
@@ -1429,12 +1476,17 @@ let prepare_fixpoint (cfg : Ir.cfg) (fixed_env_ref : fixed_env ref) =
           if is_empty potentially_new then (accumulated, None)
           else if is_empty accumulated then (potentially_new, potentially_new)
           else
-            let join_result, actually_new =
-              StateAndMaybeReturnSet.union_diff
-                (Option.get potentially_new)
-                (Option.get accumulated)
-            in
-            (Some join_result, Some actually_new)
+            let accumulated = Option.get accumulated in
+            let potentially_new = Option.get potentially_new in
+            match potentially_new with
+            | StateAndReturnSet _ ->
+                ( Some (StateAndMaybeReturnSet.union accumulated potentially_new),
+                  Some potentially_new )
+            | _ ->
+                let join_result, actually_new =
+                  StateAndMaybeReturnSet.union_diff potentially_new accumulated
+                in
+                (Some join_result, Some actually_new)
 
         let analyze =
           let inner =
@@ -1469,7 +1521,7 @@ let prepare_fixpoint (cfg : Ir.cfg) (fixed_env_ref : fixed_env ref) =
               @@ LazyStateSet.cardinal_upper_bound states
           | Some (StateAndMaybeReturnSet.StateAndReturnSet states) ->
               Printf.sprintf "Some(StateAndReturnSet %d)"
-              @@ StateAndReturnSet.cardinal states
+              @@ LazyStateAndReturnSet.cardinal_upper_bound states
           | None -> "None"
 
         let show_vertex = Block_flow.show_flow_node

@@ -29,6 +29,8 @@ function _init()
 	-- title_screen()
 
 	frames = 0
+	seconds=0
+	minutes=0
 	deaths = 0
 	max_djump = 1
 	load_room(1, 0)
