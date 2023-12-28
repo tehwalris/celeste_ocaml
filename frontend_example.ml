@@ -81,7 +81,7 @@ let () =
   let states = ref @@ Interpreter.LazyStateSet.of_list [ initial_state ] in
   states := run_step cfg !states !fixed_env_ref;
   print_step !states;
-  for i = 1 to 1000 do
+  for i = 1 to 100 do
     Printf.printf "Frame %d\n%!" i;
     states := run_step frame_cfg !states !fixed_env_ref;
     print_step !states

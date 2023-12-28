@@ -36,12 +36,15 @@ other_thing = {}
 init_object(player, 0, 0)
 init_object(other_thing, 10, 10)
 
-for i=1,256 do
-    if i % 10 == 0 then
+for i=1,5000 do
+    if i % 100 == 0 then
         __debug("i", i)
     end
-    foreach(objects, function(obj)
-        obj.collide(other_thing, 0, 0)
-    end)
-    __hint_normalize()
+    -- foreach(objects, function(obj)
+    --     -- obj.collide(other_thing, 0, 0)
+    -- end)
+    -- local noop = function() end
+    for i=1,#objects do
+        -- local x = 1
+    end
 end
