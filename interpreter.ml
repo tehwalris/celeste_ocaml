@@ -1294,7 +1294,7 @@ and flow_branch (terminator : Ir.terminator) (flow_target : Ir.label)
                     state
                 in
                 Some { filtered_state with vector_size = mask_true_count }
-          | Vector _ -> failwith "cbr on vector of non-bool values")
+          | Vector _ -> if flow_target = true_label then Some state else None)
         states
   | _ -> failwith "Unexpected flow"
 
