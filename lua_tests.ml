@@ -181,6 +181,7 @@ let%test_unit _ = test_against_real_lua "undefined_fields.lua" true
 let%test_unit _ = test_branch_prints "abstract_boolean_no_call.lua" false
 let%test_unit _ = test_branch_prints "abstract_boolean.lua" false
 let%test_unit _ = test_branch_prints "vector.lua" true
+let%test_unit _ = test_branch_prints "vector_branch.lua" true
 let%test_unit _ = test_branch_count "branching_with_irrelevant_locals.lua" 1
 let%test_unit _ = test_branch_count "branching_with_allocations.lua" 1
 let%test_unit _ = test_branch_count "branching_into_return.lua" 1

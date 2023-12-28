@@ -1215,6 +1215,7 @@ and flow_branch (terminator : Ir.terminator) (flow_target : Ir.label)
           | Scalar SUnknownBool -> Some state
           | Scalar _ -> if flow_target = true_label then Some state else None
           | Vector (VBool vec) ->
+              assert (Array.length vec = state.vector_size);
               let filter_value = flow_target = true_label in
               let mask = Array.map (fun v -> v = filter_value) vec in
               let mask_true_count =
