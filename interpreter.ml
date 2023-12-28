@@ -183,6 +183,12 @@ module HeapIdMap = Map.Make (struct
   let compare = Stdlib.compare
 end)
 
+module HeapValueMap = Map.Make (struct
+  type t = heap_value
+
+  let compare = Stdlib.compare
+end)
+
 module Heap = struct
   type t = {
     old_values : heap_value Array.t;
@@ -1090,96 +1096,120 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
   | NilConstant ->
       handle_separately_no_phi (fun state -> (state, Scalar (SNil None)))
   | Call (fun_local_id, arg_local_ids) ->
-      let results =
-        List.concat_map
-          (fun state ->
-            let arg_values =
-              List.map
-                (fun id -> Ir.LocalIdMap.find id state.local_env)
-                arg_local_ids
-            in
+      let states_by_function =
+        List.fold_left
+          (fun states_by_function state ->
             let fun_heap_id = heap_id_from_pointer_local state fun_local_id in
-            match Heap.find fun_heap_id state.heap with
-            | HBuiltinFun name ->
-                incr_mut Perf.global_counters.builtin_call;
-                let builtin_fun = List.assoc name fixed_env.builtin_funs in
-                [ builtin_fun state arg_values ]
-            | HClosure (fun_global_id, captured_values) ->
-                incr_mut Perf.global_counters.closure_call;
-                let fun_def, fun_cfg =
-                  List.find
-                    (fun (fun_def, _) -> fun_def.Ir.name = fun_global_id)
-                    fixed_env.fun_defs
-                in
-                if fun_cfg.is_noop then (
-                  incr_mut Perf.global_counters.closure_call_noop;
-                  [ (state, Scalar (SNil None)) ])
-                else
-                  let padded_arg_values =
-                    if List.length arg_values < List.length fun_def.Ir.arg_ids
-                    then
-                      arg_values
-                      @ List.init
-                          (List.length fun_def.Ir.arg_ids
-                          - List.length arg_values)
-                          (fun _ -> Scalar (SNil None))
-                    else if
-                      List.length arg_values > List.length fun_def.Ir.arg_ids
-                    then
-                      BatList.take (List.length fun_def.Ir.arg_ids) arg_values
-                    else arg_values
-                  in
-                  let inner_state : state =
-                    {
-                      state with
-                      local_env =
-                        List.fold_left2
-                          (fun locals id value ->
-                            Ir.LocalIdMap.add id value locals)
-                          Ir.LocalIdMap.empty
-                          (fun_def.Ir.capture_ids @ fun_def.Ir.arg_ids)
-                          (captured_values @ padded_arg_values);
-                      outer_local_envs =
-                        state.local_env :: state.outer_local_envs;
-                    }
-                  in
-                  let inner_result =
-                    try
-                      interpret_cfg
-                        (LazyStateSet.of_list [ inner_state ])
-                        fun_cfg
-                    with err ->
-                      Printf.eprintf "Error in function %s\n" fun_global_id;
-                      raise err
-                  in
-                  inner_result
-                  |> (function
-                       | StateAndMaybeReturnSet.StateSet inner_states ->
-                           inner_states
-                           |> LazyStateSet.to_non_normalized_non_deduped_seq
-                           |> Seq.map (fun inner_state ->
-                                  (inner_state, Scalar (SNil None)))
-                       | StateAndMaybeReturnSet.StateAndReturnSet
-                           inner_states_and_returns ->
-                           inner_states_and_returns |> StateAndReturnSet.to_seq)
-                  |> Seq.map (fun (inner_state, return_value) ->
-                         let state =
-                           {
-                             heap = inner_state.heap;
-                             local_env = List.hd inner_state.outer_local_envs;
-                             outer_local_envs =
-                               List.tl inner_state.outer_local_envs;
-                             global_env = inner_state.global_env;
-                             prints = inner_state.prints;
-                             vector_size = inner_state.vector_size;
-                           }
-                         in
-                         (state, return_value))
-                  |> List.of_seq
-            | _ -> failwith "Calling something that's not a function")
-          states
+            let fun_heap_value = Heap.find fun_heap_id state.heap in
+            let old_list =
+              HeapValueMap.find_opt fun_heap_value states_by_function
+              |> Option.value ~default:[]
+            in
+            HeapValueMap.add fun_heap_value (state :: old_list)
+              states_by_function)
+          HeapValueMap.empty states
       in
-      (results, None)
+      let states =
+        states_by_function |> HeapValueMap.to_seq
+        |> Seq.concat_map (fun (fun_heap_value, states) ->
+               let arg_values_of_state state =
+                 List.map
+                   (fun id -> Ir.LocalIdMap.find id state.local_env)
+                   arg_local_ids
+               in
+               match fun_heap_value with
+               | HBuiltinFun name ->
+                   incr_mut Perf.global_counters.builtin_call;
+                   let builtin_fun = List.assoc name fixed_env.builtin_funs in
+                   states |> List.to_seq
+                   |> Seq.map (fun state ->
+                          builtin_fun state @@ arg_values_of_state state)
+               | HClosure (fun_global_id, captured_values) ->
+                   incr_mut Perf.global_counters.closure_call;
+                   let fun_def, fun_cfg =
+                     List.find
+                       (fun (fun_def, _) -> fun_def.Ir.name = fun_global_id)
+                       fixed_env.fun_defs
+                   in
+                   if fun_cfg.is_noop then (
+                     incr_mut Perf.global_counters.closure_call_noop;
+                     states |> List.to_seq
+                     |> Seq.map (fun state -> (state, Scalar (SNil None))))
+                   else
+                     let inner_states =
+                       List.map
+                         (fun state ->
+                           let arg_values = arg_values_of_state state in
+                           let padded_arg_values =
+                             if
+                               List.length arg_values
+                               < List.length fun_def.Ir.arg_ids
+                             then
+                               arg_values
+                               @ List.init
+                                   (List.length fun_def.Ir.arg_ids
+                                   - List.length arg_values)
+                                   (fun _ -> Scalar (SNil None))
+                             else if
+                               List.length arg_values
+                               > List.length fun_def.Ir.arg_ids
+                             then
+                               BatList.take
+                                 (List.length fun_def.Ir.arg_ids)
+                                 arg_values
+                             else arg_values
+                           in
+                           {
+                             state with
+                             local_env =
+                               List.fold_left2
+                                 (fun locals id value ->
+                                   Ir.LocalIdMap.add id value locals)
+                                 Ir.LocalIdMap.empty
+                                 (fun_def.Ir.capture_ids @ fun_def.Ir.arg_ids)
+                                 (captured_values @ padded_arg_values);
+                             outer_local_envs =
+                               state.local_env :: state.outer_local_envs;
+                           })
+                         states
+                     in
+                     let inner_result =
+                       try
+                         interpret_cfg
+                           (LazyStateSet.of_list inner_states)
+                           fun_cfg
+                       with err ->
+                         Printf.eprintf "Error in function %s\n" fun_global_id;
+                         raise err
+                     in
+                     inner_result
+                     |> (function
+                          | StateAndMaybeReturnSet.StateSet inner_states ->
+                              inner_states
+                              |> LazyStateSet.to_non_normalized_non_deduped_seq
+                              |> Seq.map (fun inner_state ->
+                                     (inner_state, Scalar (SNil None)))
+                          | StateAndMaybeReturnSet.StateAndReturnSet
+                              inner_states_and_returns ->
+                              inner_states_and_returns
+                              |> StateAndReturnSet.to_seq)
+                     |> Seq.map (fun (inner_state, return_value) ->
+                            let state =
+                              {
+                                heap = inner_state.heap;
+                                local_env = List.hd inner_state.outer_local_envs;
+                                outer_local_envs =
+                                  List.tl inner_state.outer_local_envs;
+                                global_env = inner_state.global_env;
+                                prints = inner_state.prints;
+                                vector_size = inner_state.vector_size;
+                              }
+                            in
+                            (state, return_value))
+               | _ -> failwith "Calling something that's not a function")
+        |> List.of_seq
+      in
+      (states, None)
   | UnaryOp (op, local_id) ->
       handle_separately_no_phi (fun state ->
           let value = Ir.LocalIdMap.find local_id state.local_env in
