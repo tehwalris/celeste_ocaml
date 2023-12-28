@@ -1042,9 +1042,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                 if Pico_number.fraction_int_of i <> 0 then
                   failwith "Index is a scalar number, but not an integer";
                 Pico_number.int_of i
-            | v ->
-                Printf.printf "DEBUG %s\n" @@ show_value v;
-                failwith "Index is not a scalar number"
+            | _ -> failwith "Index is not a scalar number"
           in
           let old_fields =
             match Heap.find table_heap_id state.heap with
