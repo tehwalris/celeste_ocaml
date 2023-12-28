@@ -67,19 +67,23 @@ let make_flow_function (flow_block_phi : Ir.label -> Ir.block -> 'a -> 'a)
     | AfterEntryBlock, BeforeNamedBlock target_name ->
         let _, terminator = cfg.entry.terminator in
         let target_block = Ir.LabelMap.find target_name named_blocks in
-        fun v ->
-          v
-          |> flow_branch terminator target_name
-          |> flow_block_before_join target_block
+        let flow_branch_bound = flow_branch terminator target_name in
+        let flow_block_before_join_bound =
+          flow_block_before_join target_block
+        in
+        fun v -> v |> flow_branch_bound |> flow_block_before_join_bound
     | AfterNamedBlock source_name, BeforeNamedBlock target_name ->
         let source_block = Ir.LabelMap.find source_name named_blocks in
         let target_block = Ir.LabelMap.find target_name named_blocks in
         let _, terminator = source_block.terminator in
+        let flow_branch_bound = flow_branch terminator target_name in
+        let flow_block_phi_bound = flow_block_phi source_name target_block in
+        let flow_block_before_join_bound =
+          flow_block_before_join target_block
+        in
         fun v ->
-          v
-          |> flow_branch terminator target_name
-          |> flow_block_phi source_name target_block
-          |> flow_block_before_join target_block
+          v |> flow_branch_bound |> flow_block_phi_bound
+          |> flow_block_before_join_bound
     | AfterEntryBlock, Return ->
         let _, terminator = cfg.entry.terminator in
         flow_return terminator
@@ -90,4 +94,14 @@ let make_flow_function (flow_block_phi : Ir.label -> Ir.block -> 'a -> 'a)
     | _ -> failwith "flow has unexpected edge"
   in
   let flow_option edge = Option.map @@ flow_some edge in
-  flow_option
+  let lazy_flow_option edge =
+    let flow_option_bound_ref = ref None in
+    fun v ->
+      match !flow_option_bound_ref with
+      | Some flow_option_bound -> flow_option_bound v
+      | None ->
+          let flow_option_bound = flow_option edge in
+          flow_option_bound_ref := Some flow_option_bound;
+          flow_option_bound v
+  in
+  lazy_flow_option

@@ -1277,33 +1277,32 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
           (state, Some (interpret_binary_op left_value op right_value)))
   | Phi _ -> failwith "Phi nodes should be handled by phi_block_flow"
 
-and flow_block_phi (source_block_name : Ir.label) (target_block : Ir.block)
-    (states : LazyStateSet.t) : LazyStateSet.t =
-  if !debug_prints then
-    Printf.printf "before flow_block_phi (%s)\n" @@ debug_states states;
+and flow_block_phi (source_block_name : Ir.label) (target_block : Ir.block) :
+    LazyStateSet.t -> LazyStateSet.t =
   let phi_instructions, _ = Ir.split_block_phi_instructions target_block in
-  LazyStateSet.map
-    (fun state ->
-      List.fold_left
-        (fun state (local_id, local_ids_by_label) ->
-          let value =
-            Ir.LocalIdMap.find
-              (List.assoc source_block_name local_ids_by_label)
-              state.local_env
-          in
-          {
-            state with
-            local_env = Ir.LocalIdMap.add local_id value state.local_env;
-          })
-        state phi_instructions)
-    states
+  let phi_instructions =
+    phi_instructions
+    |> List.map (fun (local_id, local_ids_by_label) ->
+           (local_id, List.assoc source_block_name local_ids_by_label))
+  in
+  fun states ->
+    LazyStateSet.map
+      (fun state ->
+        List.fold_left
+          (fun state (target_local_id, source_local_id) ->
+            let value = Ir.LocalIdMap.find source_local_id state.local_env in
+            {
+              state with
+              local_env =
+                Ir.LocalIdMap.add target_local_id value state.local_env;
+            })
+          state phi_instructions)
+      states
 
 and flow_block_before_join
     (live_variable_analysis :
       Flow.flow_side * Ir.local_id -> Ir.LocalIdSet.t option)
-    (target_block : Ir.block) (states : LazyStateSet.t) : LazyStateSet.t =
-  if !debug_prints then
-    Printf.printf "before flow_block_before_join (%s)\n" @@ debug_states states;
+    (target_block : Ir.block) : LazyStateSet.t -> LazyStateSet.t =
   let terminator_local_id, _ = target_block.terminator in
   let first_non_phi_local_id =
     target_block.instructions
@@ -1315,86 +1314,92 @@ and flow_block_before_join
   let live_variables =
     Option.get @@ live_variable_analysis (Flow.Before, first_non_phi_local_id)
   in
-  let states =
-    LazyStateSet.map
-      (fun state ->
-        let new_local_env =
-          Ir.LocalIdMap.filter
-            (fun local_id _ -> Ir.LocalIdSet.mem local_id live_variables)
-            state.local_env
-        in
-        if new_local_env == state.local_env then state
-        else { state with local_env = new_local_env })
-      states
-  in
-  if !debug_prints then
-    Printf.printf "after flow_block_before_join (%s)\n" @@ debug_states states;
-  states
+  fun states ->
+    let states =
+      LazyStateSet.map
+        (fun state ->
+          let new_local_env =
+            Ir.LocalIdMap.filter
+              (fun local_id _ -> Ir.LocalIdSet.mem local_id live_variables)
+              state.local_env
+          in
+          if new_local_env == state.local_env then state
+          else { state with local_env = new_local_env })
+        states
+    in
+    if !debug_prints then
+      Printf.printf "after flow_block_before_join (%s)\n" @@ debug_states states;
+    states
 
-and flow_block_post_phi (fixed_env : fixed_env) (block : Ir.block)
-    (states : LazyStateSet.t) : LazyStateSet.t =
+and flow_block_post_phi (fixed_env : fixed_env) (block : Ir.block) :
+    LazyStateSet.t -> LazyStateSet.t =
   let _, non_phi_instructions = Ir.split_block_phi_instructions block in
-  let states =
-    states |> LazyStateSet.to_non_normalized_non_deduped_seq |> List.of_seq
-  in
-  let states =
-    List.fold_left
-      (fun states (local_id, insn) ->
-        let results, _ = interpret_non_phi_instruction fixed_env states insn in
-        List.map
-          (fun (state, value) ->
-            match value with
-            | Some value ->
-                {
-                  state with
-                  local_env = Ir.LocalIdMap.add local_id value state.local_env;
-                }
-            | None -> state)
-          results)
-      states non_phi_instructions
-  in
-  let states = LazyStateSet.of_list states in
-  states
+  fun states ->
+    let states =
+      states |> LazyStateSet.to_non_normalized_non_deduped_seq |> List.of_seq
+    in
+    let states =
+      List.fold_left
+        (fun states (local_id, insn) ->
+          let results, _ =
+            interpret_non_phi_instruction fixed_env states insn
+          in
+          List.map
+            (fun (state, value) ->
+              match value with
+              | Some value ->
+                  {
+                    state with
+                    local_env = Ir.LocalIdMap.add local_id value state.local_env;
+                  }
+              | None -> state)
+            results)
+        states non_phi_instructions
+    in
+    let states = LazyStateSet.of_list states in
+    states
 
-and flow_branch (terminator : Ir.terminator) (flow_target : Ir.label)
-    (states : LazyStateSet.t) : LazyStateSet.t =
-  if !debug_prints then
-    Printf.printf "before flow_branch (%s)\n" @@ debug_states states;
+and flow_branch (terminator : Ir.terminator) (flow_target : Ir.label) :
+    LazyStateSet.t -> LazyStateSet.t =
   match terminator with
-  | Ir.Br terminator_target when terminator_target = flow_target -> states
+  | Ir.Br terminator_target when terminator_target = flow_target ->
+      fun states -> states
   | Ir.Cbr (local_id, true_label, false_label)
     when flow_target = true_label || flow_target = false_label ->
-      LazyStateSet.filter_map
-        (fun state ->
-          match Ir.LocalIdMap.find local_id state.local_env with
-          | Scalar (SBool false) | Scalar (SNil _) ->
-              if flow_target = false_label then Some state else None
-          | Scalar SUnknownBool -> Some state
-          | Scalar _ -> if flow_target = true_label then Some state else None
-          | Vector (VBool vec) ->
-              Perf.count_and_time Perf.global_counters.cbr_filter @@ fun () ->
-              assert (Array.length vec = state.vector_size);
-              let filter_value = flow_target = true_label in
-              let mask = Array.map (fun v -> v = filter_value) vec in
-              let mask_true_count =
-                Array.fold_left (fun acc v -> if v then acc + 1 else acc) 0 mask
-              in
-              if mask_true_count = 0 then None
-              else
-                let filtered_state =
-                  state_map_values
-                    (function
-                      | Scalar s -> Scalar s
-                      | Vector vec -> Option.get @@ filter_vector mask vec)
-                    state
+      fun states ->
+        LazyStateSet.filter_map
+          (fun state ->
+            match Ir.LocalIdMap.find local_id state.local_env with
+            | Scalar (SBool false) | Scalar (SNil _) ->
+                if flow_target = false_label then Some state else None
+            | Scalar SUnknownBool -> Some state
+            | Scalar _ -> if flow_target = true_label then Some state else None
+            | Vector (VBool vec) ->
+                Perf.count_and_time Perf.global_counters.cbr_filter @@ fun () ->
+                assert (Array.length vec = state.vector_size);
+                let filter_value = flow_target = true_label in
+                let mask = Array.map (fun v -> v = filter_value) vec in
+                let mask_true_count =
+                  Array.fold_left
+                    (fun acc v -> if v then acc + 1 else acc)
+                    0 mask
                 in
-                Some { filtered_state with vector_size = mask_true_count }
-          | Vector _ -> if flow_target = true_label then Some state else None)
-        states
+                if mask_true_count = 0 then None
+                else
+                  let filtered_state =
+                    state_map_values
+                      (function
+                        | Scalar s -> Scalar s
+                        | Vector vec -> Option.get @@ filter_vector mask vec)
+                      state
+                  in
+                  Some { filtered_state with vector_size = mask_true_count }
+            | Vector _ -> if flow_target = true_label then Some state else None)
+          states
   | _ -> failwith "Unexpected flow"
 
-and flow_return (terminator : Ir.terminator) (states : LazyStateSet.t) :
-    StateAndMaybeReturnSet.t =
+and flow_return (terminator : Ir.terminator) :
+    LazyStateSet.t -> StateAndMaybeReturnSet.t =
   let clean_state_after_return preserved_local_id state =
     {
       state with
@@ -1408,15 +1413,17 @@ and flow_return (terminator : Ir.terminator) (states : LazyStateSet.t) :
   in
   match terminator with
   | Ir.Ret (Some local_id) ->
-      StateAndMaybeReturnSet.StateAndReturnSet
-        (states |> LazyStateSet.to_non_normalized_non_deduped_seq
-        |> Seq.map (fun state ->
-               let state = clean_state_after_return (Some local_id) state in
-               (state, Ir.LocalIdMap.find local_id state.local_env))
-        |> List.of_seq |> LazyStateAndReturnSet.of_list)
+      fun states ->
+        StateAndMaybeReturnSet.StateAndReturnSet
+          (states |> LazyStateSet.to_non_normalized_non_deduped_seq
+          |> Seq.map (fun state ->
+                 let state = clean_state_after_return (Some local_id) state in
+                 (state, Ir.LocalIdMap.find local_id state.local_env))
+          |> List.of_seq |> LazyStateAndReturnSet.of_list)
   | Ir.Ret None ->
-      StateAndMaybeReturnSet.StateSet
-        (LazyStateSet.map (clean_state_after_return None) states)
+      fun states ->
+        StateAndMaybeReturnSet.StateSet
+          (LazyStateSet.map (clean_state_after_return None) states)
   | _ -> failwith "Unexpected flow"
 
 and interpret_cfg (states : LazyStateSet.t) (cfg : prepared_cfg) :
@@ -1523,9 +1530,11 @@ let prepare_fixpoint (cfg : Ir.cfg) (fixed_env_ref : fixed_env ref) =
                 @@ flow_return terminator)
               cfg
           in
-          fun edge data ->
-            Perf.count_and_time Perf.global_counters.flow_analyze @@ fun () ->
-            inner edge data
+          fun edge ->
+            let inner_bound = inner edge in
+            fun data ->
+              Perf.count_and_time Perf.global_counters.flow_analyze @@ fun () ->
+              inner_bound data
 
         let show_data = function
           | Some (StateAndMaybeReturnSet.StateSet states) ->
