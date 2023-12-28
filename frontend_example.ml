@@ -3,16 +3,15 @@ open Compiler_lib
 let suffix_code =
   String.trim
     {|
--- -- TODO double check that the order is: init, update, draw, update, draw, ...
--- _init()
--- __reset_button_states()
+-- TODO double check that the order is: init, update, draw, update, draw, ...
+_init()
+__reset_button_states()
 |}
 
-let frame_code =
-  String.trim {|
--- _update()
--- _draw()
--- __reset_button_states()
+let frame_code = String.trim {|
+_update()
+_draw()
+__reset_button_states()
 |}
 
 let print_lua_perf_counters fixed_env =
@@ -46,7 +45,7 @@ let print_step states =
   Printf.printf "\n%!"
 
 let () =
-  let lua_code = BatFile.with_file_in "benchmarks/collide.lua" BatIO.read_all in
+  let lua_code = BatFile.with_file_in "celeste-room-2.lua" BatIO.read_all in
   let ast =
     Lua_parser.Parse.parse_from_string
     @@ String.concat "\n"
@@ -82,7 +81,7 @@ let () =
   let states = ref @@ Interpreter.LazyStateSet.of_list [ initial_state ] in
   states := run_step cfg !states !fixed_env_ref;
   print_step !states;
-  for i = 1 to 0 do
+  for i = 1 to 100 do
     Printf.printf "Frame %d\n%!" i;
     states := run_step frame_cfg !states !fixed_env_ref;
     print_step !states
