@@ -93,6 +93,29 @@ let map_vector (f : scalar_value -> scalar_value) vec =
   if length = 0 then vec
   else seq_of_vector vec |> Seq.map f |> vector_of_non_empty_seq
 
+let filter_vector (mask : bool Array.t) (mask_true_count : int) vec =
+  assert (Array.length mask = length_of_vector vec);
+  assert (Array.length mask >= mask_true_count);
+  assert (mask_true_count >= 1);
+  if Array.length mask = mask_true_count then (
+    assert (mask_true_count > 1);
+    assert (Array.for_all (fun b -> b) mask);
+    Vector vec)
+  else
+    let indices =
+      mask |> Array.to_seq
+      |> Seq.mapi (fun i b -> if b then Some i else None)
+      |> Seq.filter_map (fun x -> x)
+      |> Array.of_seq
+    in
+    assert (Array.length indices = mask_true_count);
+    let filtered_vec = vector_extract_by_indices indices vec in
+    if mask_true_count = 1 then
+      match seq_of_vector filtered_vec |> List.of_seq with
+      | [ v ] -> Scalar v
+      | _ -> failwith "expected scalar"
+    else Vector filtered_vec
+
 let map2_vector (f : scalar_value -> scalar_value -> scalar_value) vec1 vec2 =
   let length1 = length_of_vector vec1 in
   let length2 = length_of_vector vec2 in
@@ -444,6 +467,11 @@ module LazyStateSet = struct
     | NormalizedList list -> NormalizedList (List.filter f list)
     | NonNormalizedList list -> NonNormalizedList (List.filter f list)
 
+  let filter_map (f : state -> state option) = function
+    | NormalizedSet set -> NormalizedSet (StateSet.filter_map f set)
+    | NormalizedList list -> NormalizedList (List.filter_map f list)
+    | NonNormalizedList list -> NonNormalizedList (List.filter_map f list)
+
   let cardinal_upper_bound (t : t) : int =
     match t with
     | NormalizedSet set -> StateSet.cardinal set
@@ -655,6 +683,16 @@ let are_all_list_values_equal (l : 'a list) : bool =
   | [] -> true
   | first :: rest -> List.for_all (fun v -> v = first) rest
 
+let unvectorize_if_possible (state : state) : state =
+  if state.vector_size = 1 then
+    state_map_values
+      (fun v ->
+        match v |> seq_of_value |> List.of_seq with
+        | [ v ] -> Scalar v
+        | _ -> assert false)
+      state
+  else state
+
 let vectorize_states (states : LazyStateSet.t) : LazyStateSet.t =
   let vectorize_values (values : value list) : value =
     let example_value = List.hd values in
@@ -671,16 +709,6 @@ let vectorize_states (states : LazyStateSet.t) : LazyStateSet.t =
     let vectorized_state = zip_map_state_values vectorize_values shape states in
     let vector_size = List.fold_left (fun a c -> a + c.vector_size) 0 states in
     { vectorized_state with vector_size }
-  in
-  let unvectorize_if_possible (state : state) : state =
-    if state.vector_size = 1 then
-      state_map_values
-        (fun v ->
-          match v |> seq_of_value |> List.of_seq with
-          | [ v ] -> Scalar v
-          | _ -> assert false)
-        state
-    else state
   in
 
   let states_by_shape =
@@ -1179,13 +1207,33 @@ and flow_branch (terminator : Ir.terminator) (flow_target : Ir.label)
   | Ir.Br terminator_target when terminator_target = flow_target -> states
   | Ir.Cbr (local_id, true_label, false_label)
     when flow_target = true_label || flow_target = false_label ->
-      LazyStateSet.filter
+      LazyStateSet.filter_map
         (fun state ->
           match Ir.LocalIdMap.find local_id state.local_env with
-          | Scalar (SBool false) | Scalar (SNil _) -> flow_target = false_label
-          | Scalar SUnknownBool -> true
-          | Scalar _ -> flow_target = true_label
-          | Vector _ -> failwith "TODO vector cbr")
+          | Scalar (SBool false) | Scalar (SNil _) ->
+              if flow_target = false_label then Some state else None
+          | Scalar SUnknownBool -> Some state
+          | Scalar _ -> if flow_target = true_label then Some state else None
+          | Vector (VBool vec) ->
+              let filter_value = flow_target = true_label in
+              let mask = Array.map (fun v -> v = filter_value) vec in
+              let mask_true_count =
+                Array.fold_left (fun acc v -> if v then acc + 1 else acc) 0 mask
+              in
+              if mask_true_count = state.vector_size then Some state
+              else if mask_true_count = 0 then None
+              else (
+                assert (
+                  mask_true_count > 0 && mask_true_count < state.vector_size);
+                let filtered_state =
+                  state_map_values
+                    (function
+                      | Scalar s -> Scalar s
+                      | Vector vec -> filter_vector mask mask_true_count vec)
+                    state
+                in
+                Some { filtered_state with vector_size = mask_true_count })
+          | Vector _ -> failwith "cbr on vector of non-bool values")
         states
   | _ -> failwith "Unexpected flow"
 
