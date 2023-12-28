@@ -750,12 +750,12 @@ let vectorize_states (states : LazyStateSet.t) : LazyStateSet.t =
         (values |> List.hd |> fst |> seq_of_value 1 |> Seq.uncons |> Option.get
        |> fst)
     in
-    if are_all_list_values_equal values then example_value
-    else if can_vectorize_value example_value then
+    if can_vectorize_value example_value then
       Vector
         (values |> List.to_seq
         |> Seq.concat_map (fun (v, vector_size) -> seq_of_value vector_size v)
         |> vector_of_non_empty_seq)
+    else if are_all_list_values_equal (List.map fst values) then example_value
     else failwith "values are not equal and not vectorizable"
   in
   let vectorize_same_shape_states shape states =
@@ -766,29 +766,12 @@ let vectorize_states (states : LazyStateSet.t) : LazyStateSet.t =
       (String.concat ", "
       @@ List.map (fun state -> string_of_int state.vector_size) states);
     List.iter state_assert_vector_lengths states;
-    let debug_vectorize_states_limited n =
-      let states = BatList.take n @@ List.rev states in
-      Printf.printf
-        "DEBUG vectorizing %d states (debug_vectorize_states_limited, \
-         shape.vector_size=%d, state[i].vector_size=[%s])\n"
-        (List.length states) shape.vector_size
-        (String.concat ", "
-        @@ List.map (fun state -> string_of_int state.vector_size) states);
+    let vectorized_state =
       {
         (zip_map_state_values vectorize_values shape states) with
         vector_size = List.fold_left (fun a c -> a + c.vector_size) 0 states;
       }
     in
-    for i = 2 to List.length states do
-      let vectorized_state = debug_vectorize_states_limited i in
-      Printf.printf "DEBUG vectorized_state.vector_size %d\n"
-        vectorized_state.vector_size;
-      state_assert_vector_lengths vectorized_state
-    done;
-    let vectorized_state =
-      debug_vectorize_states_limited @@ List.length states
-    in
-    state_assert_vector_lengths vectorized_state;
     vectorized_state
   in
 
@@ -806,8 +789,12 @@ let vectorize_states (states : LazyStateSet.t) : LazyStateSet.t =
   in
   states_by_shape |> StateMap.to_seq
   |> Seq.map (fun (shape, states) ->
-         vectorize_same_shape_states shape states
-         |> dedup_vectorized_state |> unvectorize_if_possible)
+         let vectorized_state =
+           vectorize_same_shape_states shape states
+           |> dedup_vectorized_state |> unvectorize_if_possible
+         in
+         state_assert_vector_lengths vectorized_state;
+         vectorized_state)
   |> List.of_seq |> LazyStateSet.of_list
 
 type prepared_cfg = {
