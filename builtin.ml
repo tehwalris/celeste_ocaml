@@ -105,6 +105,29 @@ let builtin_debug : builtin_fun =
   @@ List.map (fun arg -> print_to_string arg) args;
   (state, Scalar (SNil None))
 
+let builtin_array_table_drop_last : builtin_fun =
+ fun state args ->
+  let table_heap_id =
+    match args with [ Scalar (SPointer v) ] -> v | _ -> failwith "Wrong args"
+  in
+  let item_heap_ids =
+    match Heap.find table_heap_id state.heap with
+    | HArrayTable items -> items
+    | _ -> failwith @@ Printf.sprintf "Expected HArrayTable"
+  in
+  let item_heap_ids =
+    match ListForArrayTable.drop_last item_heap_ids with
+    | Some v -> v
+    | None -> failwith "Cannot drop last element of empty array table"
+  in
+  let state =
+    {
+      state with
+      heap = Heap.add table_heap_id (HArrayTable item_heap_ids) state.heap;
+    }
+  in
+  (state, Scalar (SNil None))
+
 let level_1_builtins =
   [
     ("__new_unknown_boolean", builtin_new_unknown_boolean);

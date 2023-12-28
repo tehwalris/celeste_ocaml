@@ -154,6 +154,10 @@ module ListForArrayTable = struct
   let nth_opt t i = if i < Array.length t then Some t.(i) else None
   let to_seq = Array.to_seq
 
+  let drop_last t =
+    if Array.length t = 0 then None
+    else Some (Array.sub t 0 (Array.length t - 1))
+
   let show t =
     Printf.sprintf "[%s]"
       (t |> Array.to_seq |> Seq.map string_of_int |> List.of_seq
@@ -795,6 +799,7 @@ type prepared_cfg = {
     Block_flow.flow_node ->
     StateAndMaybeReturnSet.t option;
   is_noop : bool;
+  counter_ref : Perf.timed_counter ref;
 }
 
 type fixed_env = {
@@ -1326,6 +1331,7 @@ and interpret_cfg (states : LazyStateSet.t) (cfg : prepared_cfg) :
         Some (StateAndMaybeReturnSet.StateSet states)
     | _ -> None
   in
+  Perf.count_and_time cfg.counter_ref @@ fun () ->
   Perf.count_and_time Perf.global_counters.fixpoint @@ fun () ->
   Option.get @@ cfg.analyze init !debug_prints Block_flow.Return
 
@@ -1423,6 +1429,9 @@ let prepare_fixpoint (cfg : Ir.cfg) (fixed_env_ref : fixed_env ref) =
   CfgFixpoint.prepare g
 
 let prepare_cfg (cfg : Ir.cfg) (fixed_env_ref : fixed_env ref) : prepared_cfg =
+  let counter_ref = ref Perf.empty_timed_counter in
+  Perf.global_counters.lua_functions :=
+    counter_ref :: !(Perf.global_counters.lua_functions);
   {
     cfg;
     analyze = prepare_fixpoint cfg fixed_env_ref;
@@ -1434,6 +1443,7 @@ let prepare_cfg (cfg : Ir.cfg) (fixed_env_ref : fixed_env ref) : prepared_cfg =
       } ->
           true
       | _ -> false);
+    counter_ref;
   }
 
 let init (cfg : Ir.cfg) (fun_defs : Ir.fun_def list)

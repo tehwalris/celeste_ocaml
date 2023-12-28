@@ -40,6 +40,7 @@ type counters = {
   fixpoint_created_node : int ref;
   fixpoint_created_edge : int ref;
   fixpoint_prepare : timed_counter ref;
+  lua_functions : timed_counter ref list ref;
 }
 [@@deriving show]
 
@@ -61,6 +62,7 @@ let global_counters : counters =
     fixpoint_created_node = ref 0;
     fixpoint_created_edge = ref 0;
     fixpoint_prepare = ref empty_timed_counter;
+    lua_functions = ref [];
   }
 
 let usecs_of_span span =
@@ -111,6 +113,20 @@ let print_counters () =
   @@ show_timed_counter !(global_counters.fixpoint_prepare);
   Printf.printf "%!"
 
+let print_named_counters (counters : (string * timed_counter) list) =
+  let counters =
+    counters
+    |> List.filter (fun (_, counter) -> counter.start_count > 0)
+    |> List.sort (fun (_, a) (_, b) ->
+           compare b.top_level_time a.top_level_time)
+  in
+  Printf.printf "Named performance counters:\n";
+  List.iter
+    (fun (name, counter) ->
+      Printf.printf "  %s: %s\n" name @@ show_timed_counter counter)
+    counters;
+  Printf.printf "%!"
+
 let reset_counters () =
   global_counters.reset_at := Mtime_clock.counter ();
   global_counters.interpret_non_phi_instruction := 0;
@@ -126,7 +142,8 @@ let reset_counters () =
   global_counters.fixpoint := empty_timed_counter;
   global_counters.fixpoint_created_node := 0;
   global_counters.fixpoint_created_edge := 0;
-  global_counters.fixpoint_prepare := empty_timed_counter
+  global_counters.fixpoint_prepare := empty_timed_counter;
+  List.iter (fun c -> c := empty_timed_counter) !(global_counters.lua_functions)
 
 let count_and_time (c : timed_counter ref) f =
   let is_top_level = Option.is_none !c.top_level_timer in

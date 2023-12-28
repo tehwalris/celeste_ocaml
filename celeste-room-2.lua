@@ -256,10 +256,6 @@ player = {
         end
 
         spr(1, this.x, this.y, 1, 1, this.flip.x, this.flip.y)
-
-        print(this.x.." "..this.y, 0, 0, 8)
-        print(this.spd.x.." "..this.spd.y, 0, 8, 8)
-        print(this.rem.x.." "..this.rem.y, 0, 16, 8)
     end
 }
 

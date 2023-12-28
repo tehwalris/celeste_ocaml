@@ -28,6 +28,36 @@ function count(v)
   return #v
 end
 
+function del(list, target)
+  if #list == 0 then
+    return nil
+  end
+
+  local found = false
+  local found_value = nil
+  for i=1,32767 do
+    if i > #list then
+      break
+    end
+    if not found then
+      local v = list[i]
+      if v == target then
+        found = true
+        found_value = v
+      end
+    end
+    if found and (i + 1) <= #list then
+      list[i] = list[i + 1]
+    end
+  end
+
+  if found then
+    -- TODO truncate
+  end
+
+  return found_value
+end
+
 -- Noop functions
 
 function print() end
