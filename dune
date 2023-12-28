@@ -1,10 +1,8 @@
 (library
  (name compiler_lib)
  (modules
-  aliasing
   block_flow
   builtin
-  bypass_redundant_loads
   contract_blocks
   custom_fixpoint
   flow
@@ -14,8 +12,7 @@
   liveness
   lua_tests
   perf
-  pico_number
-  remove_dead_instructions)
+  pico_number)
  (libraries
   bigarray
   lua_parser.lib
