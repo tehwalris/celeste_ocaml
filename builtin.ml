@@ -56,10 +56,13 @@ let builtin_new_vector : builtin_fun =
                failwith "Value is of a type that can not be stored in a local")
     |> value_of_non_empty_seq
   in
-  let vector_size = vec |> seq_of_value 1 |> Seq.length in
-  assert (vector_size > 1);
-  assert (state.vector_size = 1 || state.vector_size = vector_size);
-  ({ state with vector_size }, vec)
+  let vector_size =
+    vec |> seq_of_value (ListForArrayTable.length item_heap_ids) |> Seq.length
+  in
+  if vector_size = 1 then (state, vec)
+  else (
+    assert (state.vector_size = 1 || state.vector_size = vector_size);
+    ({ state with vector_size }, vec))
 
 let rec print_to_string arg =
   match arg with

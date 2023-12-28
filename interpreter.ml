@@ -56,16 +56,12 @@ let vector_compare_indices vec i j =
   with exn -> raise exn
 
 let value_unvectorize_if_possible (value : value) : value =
-  (* TODO I guess you could unvectorize if all values are equal (regardless of
-     length), but I'm not sure that it's worth it*)
   match value with
   | Scalar _ -> value
   | Vector vec ->
-      if length_of_vector_unchecked vec = 1 then
-        match vec with
-        | VNumber a -> Scalar (SNumber a.(0))
-        | VBool a -> Scalar (SBool a.(0))
-      else value
+      let seq = seq_of_vector vec in
+      let first, _ = Option.get @@ Seq.uncons seq in
+      if Seq.for_all (fun v -> v = first) seq then Scalar first else value
 
 let vector_extract_by_indices indices vec =
   let extracted =
@@ -77,10 +73,10 @@ let vector_extract_by_indices indices vec =
   in
   Vector extracted |> value_unvectorize_if_possible
 
-let seq_of_value broadcast_length = function
-  | Scalar s -> Seq.repeat s |> Seq.take broadcast_length
+let seq_of_value vector_size = function
+  | Scalar s -> Seq.repeat s |> Seq.take vector_size
   | Vector v ->
-      assert (length_of_vector v = broadcast_length);
+      assert (length_of_vector v = vector_size);
       seq_of_vector v
 
 let example_of_vector vec =
@@ -747,8 +743,9 @@ let vectorize_states (states : LazyStateSet.t) : LazyStateSet.t =
   let vectorize_values (values : (value * int) list) : value =
     let example_value =
       Scalar
-        (values |> List.hd |> fst |> seq_of_value 1 |> Seq.uncons |> Option.get
-       |> fst)
+        (values |> List.hd
+        |> (fun (v, vector_size) -> seq_of_value vector_size v)
+        |> Seq.uncons |> Option.get |> fst)
     in
     if can_vectorize_value example_value then
       values |> List.to_seq
@@ -1047,10 +1044,6 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                 Pico_number.int_of i
             | v ->
                 Printf.printf "DEBUG %s\n" @@ show_value v;
-                (match v with
-                | Scalar _ -> ()
-                | Vector v ->
-                    Printf.printf "DEBUG length %d\n" @@ length_of_vector v);
                 failwith "Index is not a scalar number"
           in
           let old_fields =
