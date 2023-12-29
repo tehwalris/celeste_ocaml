@@ -637,15 +637,23 @@ function init_object(type,x,y)
 	obj.move=function(ox,oy)
 		local amount
 		-- [x] get move amount
- 	obj.rem.x = obj.rem.x + (ox)
-		amount = flr(obj.rem.x + 0.5)
-		obj.rem.x = obj.rem.x - (amount)
+		__debug("DEBUG A")
+ 	obj.rem.x = obj.rem.x + (ox) + 0.5
+		__debug("DEBUG B")
+		obj.rem.x = __split_by_flr(obj.rem.x)
+		__debug("DEBUG C")
+		amount = flr(obj.rem.x)
+		__debug("DEBUG D")
+		obj.rem.x = obj.rem.x - 0.5 - (amount)
+		__debug("DEBUG E")
 		obj.move_x(amount,0)
+		__debug("DEBUG F")
 		
 		-- [y] get move amount
-		obj.rem.y = obj.rem.y + (oy)
-		amount = flr(obj.rem.y + 0.5)
-		obj.rem.y = obj.rem.y - (amount)
+		obj.rem.y = obj.rem.y + (oy) + 0.5
+		obj.rem.y = __split_by_flr(obj.rem.y)
+		amount = flr(obj.rem.y)
+		obj.rem.y = obj.rem.y - 0.5 - (amount)
 		obj.move_y(amount)
 	end
 	

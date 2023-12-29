@@ -153,16 +153,73 @@ let builtin_error : builtin_fun =
 
 let builtin_min = make_number_number_builtin Pico_number.min
 let builtin_max = make_number_number_builtin Pico_number.max
-let builtin_flr = make_number_builtin Pico_number.flr
 let builtin_abs = make_number_builtin Pico_number.abs
+
+let builtin_flr : builtin_fun =
+  let number_interval_of_scalar = function
+    | SNumber v -> Pico_number_interval.of_number v
+    | SNumberInterval v -> v
+    | _ -> failwith "Some arguments are not numbers or number intervals"
+  in
+  let f (Pico_number_interval.T (low, high)) =
+    let low_flr = Pico_number.flr low in
+    let high_flr = Pico_number.flr high in
+    if low_flr <> high_flr then
+      failwith "flr of interval is not a single integer";
+    low_flr
+  in
+  let f_scalar a = SNumber (f (number_interval_of_scalar a)) in
+  fun state args ->
+    match args with
+    | [ Scalar a ] -> [ (state, Scalar (f_scalar a)) ]
+    | [ Vector a ] -> [ (state, map_vector f_scalar a) ]
+    | _ -> failwith "Wrong args"
+
+let builtin_split_by_flr : builtin_fun =
+ fun state args ->
+  let f_scalar = function
+    | SNumber v -> [ SNumber v ]
+    | SNumberInterval v_interval ->
+        let (Pico_number_interval.T (low, high)) = v_interval in
+        let current = ref low in
+        let dispenser () =
+          let v = !current in
+          if v > high then None
+          else
+            let smallest_with_next_flr =
+              v |> Pico_number.flr |> Pico_number.add (Pico_number.of_int 1)
+            in
+            let largest_with_same_flr =
+              smallest_with_next_flr |> Pico_number.below
+            in
+            assert (Pico_number.flr largest_with_same_flr = Pico_number.flr v);
+            assert (
+              Pico_number.flr smallest_with_next_flr
+              = Pico_number.add (Pico_number.flr v) (Pico_number.of_int 1));
+            current := smallest_with_next_flr;
+            let output_interval =
+              Pico_number_interval.of_numbers v
+                (Pico_number.min high largest_with_same_flr)
+            in
+            assert (
+              Pico_number_interval.contains_interval v_interval output_interval);
+            Some (SNumberInterval output_interval)
+        in
+        Seq.of_dispenser dispenser |> List.of_seq
+    | _ -> failwith "Some arguments are not numbers"
+  in
+  match args with
+  | [ Scalar v ] -> f_scalar v |> List.map (fun v -> (state, Scalar v))
+  | _ -> failwith "Wrong args"
 
 let level_2_builtins =
   [
     ("error", builtin_error);
     ("min", builtin_min);
     ("max", builtin_max);
-    ("flr", builtin_flr);
     ("abs", builtin_abs);
+    ("flr", builtin_flr);
+    ("__split_by_flr", builtin_split_by_flr);
   ]
 
 (* Level 5 *)
