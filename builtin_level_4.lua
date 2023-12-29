@@ -52,7 +52,7 @@ function del(list, target)
   end
 
   if found then
-    -- TODO truncate
+    __array_table_drop_last(list)
   end
 
   return found_value

@@ -135,6 +135,7 @@ let level_1_builtins =
     ("__print", builtin_print);
     ("__print_vector_sorted", builtin_print);
     ("__debug", builtin_debug);
+    ("__array_table_drop_last", builtin_array_table_drop_last);
   ]
 
 (* Level 2 *)
