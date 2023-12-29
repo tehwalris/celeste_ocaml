@@ -926,7 +926,7 @@ let interpret_unary_op state op v =
   | Scalar v -> Scalar (interpret_unary_op_scalar state op v)
   | Vector v -> map_vector (interpret_unary_op_scalar state op) v
 
-let interpret_binary_op_scalar (l : scalar_value) (op : string)
+let rec interpret_binary_op_scalar (l : scalar_value) (op : string)
     (r : scalar_value) : scalar_value =
   let is_simple_value v =
     match v with
@@ -967,6 +967,18 @@ let interpret_binary_op_scalar (l : scalar_value) (op : string)
   | SNumber l, "<=", SNumber r -> SBool (Int32.compare l r <= 0)
   | SNumber l, ">", SNumber r -> SBool (Int32.compare l r > 0)
   | SNumber l, ">=", SNumber r -> SBool (Int32.compare l r >= 0)
+  | SNumber l, op, SNumberInterval r ->
+      let l = SNumberInterval (Pico_number_interval.of_number l) in
+      let r = SNumberInterval r in
+      interpret_binary_op_scalar l op r
+  | SNumberInterval l, op, SNumber r ->
+      let l = SNumberInterval l in
+      let r = SNumberInterval (Pico_number_interval.of_number r) in
+      interpret_binary_op_scalar l op r
+  | SNumberInterval l, "+", SNumberInterval r ->
+      SNumberInterval (Pico_number_interval.add l r)
+  | SNumberInterval l, "-", SNumberInterval r ->
+      SNumberInterval (Pico_number_interval.sub l r)
   | SString l, "..", SString r -> SString (l ^ r)
   | SString l, "..", SNumber r ->
       SString (l ^ Int.to_string @@ Pico_number.int_of r)
