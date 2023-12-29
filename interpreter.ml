@@ -838,6 +838,22 @@ let vectorize_states (states : LazyStateSet.t) : LazyStateSet.t =
          vectorized_state)
   |> List.of_seq |> LazyStateSet.of_list
 
+let unvectorize_state (state : state) : state Seq.t =
+  match unpack_state_vector_values state with
+  | [] ->
+      assert (state.vector_size = 1);
+      Seq.return state
+  | vector_values ->
+      assert (
+        List.for_all
+          (fun vec -> length_of_vector vec = state.vector_size)
+          vector_values);
+      vector_values |> List.map seq_of_vector |> zip_seq_list
+      |> Seq.map (fun scalar_values ->
+             scalar_values
+             |> List.map (fun v -> Scalar v)
+             |> pack_state_vector_values state vector_values)
+
 type prepared_cfg = {
   cfg : Ir.cfg;
   analyze :

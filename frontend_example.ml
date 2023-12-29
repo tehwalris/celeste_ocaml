@@ -35,6 +35,10 @@ let run_step cfg states fixed_env =
   in
   states |> Interpreter.LazyStateSet.normalize |> Interpreter.vectorize_states
 
+let print_state_summary state =
+  let summary = Inspect.make_state_summary state in
+  Printf.printf "%s\n" @@ Inspect.show_state_summary summary
+
 let print_step states =
   (let states = Interpreter.LazyStateSet.normalize states in
    Printf.printf "Got %d states (%d if expanding vectors) after execution\n"
@@ -42,6 +46,10 @@ let print_step states =
     |> Interpreter.StateSet.cardinal)
      (states |> Interpreter.LazyStateSet.to_non_normalized_non_deduped_seq
      |> Seq.fold_left (fun acc s -> acc + s.Interpreter.vector_size) 0));
+  states |> Interpreter.LazyStateSet.to_normalized_state_set
+  |> Interpreter.StateSet.to_seq
+  |> Seq.concat_map Interpreter.unvectorize_state
+  |> Seq.iter print_state_summary;
   Printf.printf "\n%!"
 
 let () =
