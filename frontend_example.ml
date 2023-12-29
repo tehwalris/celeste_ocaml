@@ -36,14 +36,18 @@ let make_heap_value_abstract_by_mark :
         let wide =
           Pico_number_interval.of_numbers neg_half (Pico_number.below half)
         in
+        let f_scalar = function
+          | Interpreter.SNumber v ->
+              assert (Pico_number_interval.contains_number wide v);
+              Interpreter.SNumberInterval wide
+          | Interpreter.SNumberInterval v ->
+              assert (Pico_number_interval.contains_interval wide v);
+              Interpreter.SNumberInterval wide
+          | _ -> assert false
+        in
         function
-        | Interpreter.Scalar (Interpreter.SNumber v) ->
-            assert (Pico_number_interval.contains_number wide v);
-            Interpreter.Scalar (Interpreter.SNumberInterval wide)
-        | Interpreter.Scalar (Interpreter.SNumberInterval v) ->
-            assert (Pico_number_interval.contains_interval wide v);
-            Interpreter.Scalar (Interpreter.SNumberInterval wide)
-        | _ -> assert false );
+        | Interpreter.Scalar v -> Interpreter.Scalar (f_scalar v)
+        | Interpreter.Vector vec -> Interpreter.map_vector f_scalar vec );
     ]
   in
   let lift f = function
@@ -118,7 +122,8 @@ let print_step states =
          in
          Inspect.StateSummaryMap.add s (old_count + 1) m)
        Inspect.StateSummaryMap.empty
-  |> Inspect.StateSummaryMap.iter (fun state_summary count ->
+  |> Inspect.StateSummaryMap.to_seq |> Seq.take 3
+  |> Seq.iter (fun (state_summary, count) ->
          Printf.printf "%d %s\n" count
          @@ Inspect.show_state_summary state_summary);
   Printf.printf "\n%!"
@@ -162,5 +167,6 @@ let () =
   print_step !states;
   for i = 1 to 100 do
     Printf.printf "Frame %d\n%!" i;
-    states := run_step frame_cfg !states !fixed_env_ref (* print_step !states *)
+    states := run_step frame_cfg !states !fixed_env_ref;
+    print_step !states
   done

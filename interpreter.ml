@@ -21,10 +21,15 @@ type scalar_value =
   | SNilPointer of string
 [@@deriving show]
 
-type vector_value = VNumber of Pico_number.t Array.t | VBool of bool Array.t
+type vector_value =
+  | VNumber of Pico_number.t Array.t
+  | VNumberInterval of Pico_number_interval.t Array.t
+  | VBool of bool Array.t
 
 let seq_of_vector = function
   | VNumber a -> a |> Array.to_seq |> Seq.map (fun v -> SNumber v)
+  | VNumberInterval a ->
+      a |> Array.to_seq |> Seq.map (fun v -> SNumberInterval v)
   | VBool a -> a |> Array.to_seq |> Seq.map (fun v -> SBool v)
 
 let show_vector_value vec =
@@ -34,6 +39,7 @@ let show_vector_value vec =
   in
   match vec with
   | VNumber _ -> Printf.sprintf "VNumber[%s]" s
+  | VNumberInterval _ -> Printf.sprintf "VNumberInterval[%s]" s
   | VBool _ -> Printf.sprintf "VBool[%s]" s
 
 let pp_vector_value fmt v = Format.pp_print_string fmt @@ show_vector_value v
@@ -42,6 +48,7 @@ type value = Scalar of scalar_value | Vector of vector_value [@@deriving show]
 
 let length_of_vector_unchecked = function
   | VNumber a -> Array.length a
+  | VNumberInterval a -> Array.length a
   | VBool a -> Array.length a
 
 let length_of_vector vec =
@@ -53,6 +60,7 @@ let vector_compare_indices vec i j =
   try
     match vec with
     | VNumber a -> Pico_number.compare a.(i) a.(j)
+    | VNumberInterval a -> Pico_number_interval.compare a.(i) a.(j)
     | VBool a -> compare a.(i) a.(j)
   with exn -> raise exn
 
@@ -69,6 +77,9 @@ let vector_extract_by_indices indices vec =
     match vec with
     | VNumber a ->
         VNumber (Array.init (Array.length indices) (fun i -> a.(indices.(i))))
+    | VNumberInterval a ->
+        VNumberInterval
+          (Array.init (Array.length indices) (fun i -> a.(indices.(i))))
     | VBool a ->
         VBool (Array.init (Array.length indices) (fun i -> a.(indices.(i))))
   in
@@ -83,7 +94,10 @@ let seq_of_value vector_size = function
 let example_of_vector vec =
   vec |> seq_of_vector |> Seq.uncons |> Option.get |> fst
 
-let can_vectorize_scalar_value = function SNumber _ -> true | _ -> false
+let can_vectorize_scalar_value = function
+  | SNumber _ -> true
+  | SNumberInterval _ -> true
+  | _ -> false
 
 let can_vectorize_value = function
   | Scalar s -> can_vectorize_scalar_value s
@@ -97,6 +111,11 @@ let value_of_non_empty_seq seq =
         VNumber
           (seq
           |> Seq.map (function SNumber n -> n | _ -> fail_mixed ())
+          |> Array.of_seq)
+    | SNumberInterval _ ->
+        VNumberInterval
+          (seq
+          |> Seq.map (function SNumberInterval n -> n | _ -> fail_mixed ())
           |> Array.of_seq)
     | SBool _ ->
         VBool

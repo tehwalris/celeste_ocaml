@@ -37,3 +37,19 @@ let contains_interval outer inner =
   inner_low >= outer_low && inner_high <= outer_high
 
 let contains_number interval n = contains_interval interval (of_number n)
+
+let union a b =
+  assert_valid a;
+  assert_valid b;
+  let (T (a_low, a_high)) = a in
+  let (T (b_low, b_high)) = b in
+  T (Pico_number.min a_low b_low, Pico_number.max a_high b_high)
+
+let intersect a b =
+  assert_valid a;
+  assert_valid b;
+  let (T (a_low, a_high)) = a in
+  let (T (b_low, b_high)) = b in
+  if a_low <= b_high && b_low <= a_high then
+    Some (T (Pico_number.max a_low b_low, Pico_number.min a_high b_high))
+  else None

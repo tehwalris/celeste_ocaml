@@ -155,12 +155,12 @@ let builtin_min = make_number_number_builtin Pico_number.min
 let builtin_max = make_number_number_builtin Pico_number.max
 let builtin_abs = make_number_builtin Pico_number.abs
 
+let number_interval_of_scalar = function
+  | SNumber v -> Pico_number_interval.of_number v
+  | SNumberInterval v -> v
+  | _ -> failwith "Some arguments are not numbers or number intervals"
+
 let builtin_flr : builtin_fun =
-  let number_interval_of_scalar = function
-    | SNumber v -> Pico_number_interval.of_number v
-    | SNumberInterval v -> v
-    | _ -> failwith "Some arguments are not numbers or number intervals"
-  in
   let f (Pico_number_interval.T (low, high)) =
     let low_flr = Pico_number.flr low in
     let high_flr = Pico_number.flr high in
@@ -176,41 +176,87 @@ let builtin_flr : builtin_fun =
     | _ -> failwith "Wrong args"
 
 let builtin_split_by_flr : builtin_fun =
- fun state args ->
-  let f_scalar = function
-    | SNumber v -> [ SNumber v ]
-    | SNumberInterval v_interval ->
-        let (Pico_number_interval.T (low, high)) = v_interval in
-        let current = ref low in
-        let dispenser () =
-          let v = !current in
-          if v > high then None
-          else
-            let smallest_with_next_flr =
-              v |> Pico_number.flr |> Pico_number.add (Pico_number.of_int 1)
-            in
-            let largest_with_same_flr =
-              smallest_with_next_flr |> Pico_number.below
-            in
-            assert (Pico_number.flr largest_with_same_flr = Pico_number.flr v);
-            assert (
-              Pico_number.flr smallest_with_next_flr
-              = Pico_number.add (Pico_number.flr v) (Pico_number.of_int 1));
-            current := smallest_with_next_flr;
-            let output_interval =
-              Pico_number_interval.of_numbers v
-                (Pico_number.min high largest_with_same_flr)
-            in
-            assert (
-              Pico_number_interval.contains_interval v_interval output_interval);
-            Some (SNumberInterval output_interval)
+  let split_into_same_flr_intervals v_interval =
+    let (Pico_number_interval.T (low, high)) = v_interval in
+    let current = ref low in
+    let dispenser () =
+      let v = !current in
+      if v > high then None
+      else
+        let smallest_with_next_flr =
+          v |> Pico_number.flr |> Pico_number.add (Pico_number.of_int 1)
         in
-        Seq.of_dispenser dispenser |> List.of_seq
-    | _ -> failwith "Some arguments are not numbers"
+        let largest_with_same_flr =
+          smallest_with_next_flr |> Pico_number.below
+        in
+        assert (Pico_number.flr largest_with_same_flr = Pico_number.flr v);
+        assert (
+          Pico_number.flr smallest_with_next_flr
+          = Pico_number.add (Pico_number.flr v) (Pico_number.of_int 1));
+        current := smallest_with_next_flr;
+        let output_interval =
+          Pico_number_interval.of_numbers v
+            (Pico_number.min high largest_with_same_flr)
+        in
+        assert (
+          Pico_number_interval.contains_interval v_interval output_interval);
+        Some output_interval
+    in
+    Seq.of_dispenser dispenser
   in
-  match args with
-  | [ Scalar v ] -> f_scalar v |> List.map (fun v -> (state, Scalar v))
-  | _ -> failwith "Wrong args"
+  fun state args ->
+    match args with
+    | [ Scalar v ] ->
+        v |> number_interval_of_scalar |> split_into_same_flr_intervals
+        |> Seq.map (fun v -> (state, Scalar (SNumberInterval v)))
+        |> List.of_seq
+    | [ Vector vec ] ->
+        let vec_intervals =
+          seq_of_vector vec |> Seq.map number_interval_of_scalar |> List.of_seq
+        in
+        let common_interval =
+          List.fold_left Pico_number_interval.union (List.hd vec_intervals)
+            vec_intervals
+        in
+        common_interval |> split_into_same_flr_intervals
+        |> Seq.filter_map (fun common_same_flr_interval ->
+               let intersected_intervals_seq =
+                 vec_intervals |> List.to_seq
+                 |> Seq.map
+                      (Pico_number_interval.intersect common_same_flr_interval)
+               in
+               let mask =
+                 intersected_intervals_seq |> Seq.map Option.is_some
+                 |> Array.of_seq
+               in
+               let mask_true_count =
+                 Array.fold_left
+                   (fun acc v -> if v then acc + 1 else acc)
+                   0 mask
+               in
+               if mask_true_count = 0 then None
+               else
+                 let filtered_state =
+                   {
+                     (state_map_values
+                        (function
+                          | Scalar s -> Scalar s
+                          | Vector vec -> Option.get @@ filter_vector mask vec)
+                        state)
+                     with
+                     vector_size = mask_true_count;
+                   }
+                 in
+                 let filtered_vec =
+                   intersected_intervals_seq
+                   |> Seq.filter_map (function
+                        | Some interval -> Some (SNumberInterval interval)
+                        | None -> None)
+                   |> value_of_non_empty_seq
+                 in
+                 Some (filtered_state, filtered_vec))
+        |> List.of_seq
+    | _ -> failwith "Wrong args"
 
 let level_2_builtins =
   [
