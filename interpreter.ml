@@ -1429,6 +1429,7 @@ and interpret_cfg (states : LazyStateSet.t) (cfg : prepared_cfg) :
     StateAndMaybeReturnSet.t =
   let init = function
     | Block_flow.BeforeEntryBlock ->
+        Printf.printf "DEBUG init BeforeEntryBlock\n";
         Some (StateAndMaybeReturnSet.StateSet states)
     | _ -> None
   in
