@@ -74,6 +74,7 @@ let mark_heap state =
 
   let h = make_state_helper state in
 
+  (* TODO mark rem_xy *)
   h.load_global "player" |> unwrap_pointer |> h.find_objects_by_type
   |> List.iter (mark "player");
 

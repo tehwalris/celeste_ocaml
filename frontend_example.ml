@@ -1,4 +1,7 @@
 open Compiler_lib
+module StringMap = Interpreter.StringMap
+module HeapIdMap = Interpreter.HeapIdMap
+module HeapIdSet = Inspect.HeapIdSet
 
 let suffix_code =
   String.trim
@@ -22,6 +25,61 @@ let print_lua_perf_counters fixed_env =
   in
   Perf.print_named_counters named_counters
 
+let make_heap_value_abstract_by_mark :
+    (Interpreter.heap_value -> Interpreter.heap_value) StringMap.t =
+  let funcs =
+    [
+      ( "rem_xy",
+        let half = Pico_number.of_string "0.5" in
+        assert (Pico_number.add half half = Pico_number.of_int 1);
+        let neg_half = Pico_number.neg half in
+        let wide =
+          Pico_number_interval.of_numbers neg_half (Pico_number.below half)
+        in
+        function
+        | Interpreter.Scalar (Interpreter.SNumber v) ->
+            assert (Pico_number_interval.contains_number wide v);
+            Interpreter.Scalar (Interpreter.SNumberInterval wide)
+        | Interpreter.Scalar (Interpreter.SNumberInterval v) ->
+            assert (Pico_number_interval.contains_interval wide v);
+            Interpreter.Scalar (Interpreter.SNumberInterval wide)
+        | _ -> assert false );
+    ]
+  in
+  let lift f = function
+    | Interpreter.HValue v -> Interpreter.HValue (f v)
+    | v -> v
+  in
+  funcs |> List.to_seq
+  |> Seq.map (fun (k, v) -> (k, lift v))
+  |> StringMap.of_seq
+
+let make_state_abstract (state : Interpreter.state) : Interpreter.state =
+  let marks = Inspect.mark_heap state in
+  let make_heap_value_abstract_by_heap_id =
+    marks |> StringMap.to_seq
+    |> Seq.filter_map (fun (mark, heap_ids) ->
+           match StringMap.find_opt mark make_heap_value_abstract_by_mark with
+           | Some f ->
+               Some
+                 (heap_ids |> HeapIdSet.to_seq
+                 |> Seq.map (fun heap_id -> (heap_id, f)))
+           | None -> None)
+    |> Seq.concat |> HeapIdMap.of_seq
+  in
+  {
+    state with
+    Interpreter.heap =
+      state.Interpreter.heap |> Interpreter.Heap.seq_of_old
+      |> Seq.map (fun (heap_id, v) ->
+             match
+               HeapIdMap.find_opt heap_id make_heap_value_abstract_by_heap_id
+             with
+             | Some f -> (heap_id, f v)
+             | None -> (heap_id, v))
+      |> Interpreter.Heap.old_of_seq;
+  }
+
 let run_step cfg states fixed_env =
   Perf.reset_counters ();
   let states_and_maybe_returns = Interpreter.interpret_cfg states cfg in
@@ -33,7 +91,10 @@ let run_step cfg states fixed_env =
     | Interpreter.StateAndMaybeReturnSet.StateAndReturnSet _ ->
         failwith "Unexpected return value"
   in
-  states |> Interpreter.LazyStateSet.normalize |> Interpreter.vectorize_states
+  states |> Interpreter.LazyStateSet.to_normalized_non_deduped_seq
+  |> Seq.map make_state_abstract
+  |> List.of_seq |> Interpreter.LazyStateSet.of_list
+  |> Interpreter.vectorize_states
 
 let print_state_summary state =
   let summary = Inspect.make_state_summary state in
