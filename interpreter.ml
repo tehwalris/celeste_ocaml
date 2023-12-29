@@ -271,7 +271,7 @@ type state = {
   vector_size : int;
 }
 
-type builtin_fun = state -> value list -> state * value
+type builtin_fun = state -> value list -> (state * value) list
 
 let failwith_not_pointer (v : value) =
   match v with
@@ -1198,11 +1198,10 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                    incr_mut Perf.global_counters.builtin_call;
                    let builtin_fun = List.assoc name fixed_env.builtin_funs in
                    states |> List.to_seq
-                   |> Seq.map (fun state ->
-                          let state, result =
-                            builtin_fun state @@ arg_values_of_state state
-                          in
-                          (state, Some result))
+                   |> Seq.concat_map (fun state ->
+                          state |> arg_values_of_state |> builtin_fun state
+                          |> List.to_seq)
+                   |> Seq.map (fun (state, result) -> (state, Some result))
                | HClosure (fun_global_id, captured_values) ->
                    Perf.count_and_time Perf.global_counters.closure_call
                    @@ fun () ->

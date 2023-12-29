@@ -8,11 +8,13 @@ let make_number_number_builtin f : builtin_fun =
   let f_scalar a b = SNumber (f (number_of_scalar a) (number_of_scalar b)) in
   fun state args ->
     match args with
-    | [ Scalar a; Scalar b ] -> (state, Scalar (f_scalar a b))
-    | [ Scalar a; Vector b ] -> (state, map_vector (fun b -> f_scalar a b) b)
-    | [ Vector a; Scalar b ] -> (state, map_vector (fun a -> f_scalar a b) a)
+    | [ Scalar a; Scalar b ] -> [ (state, Scalar (f_scalar a b)) ]
+    | [ Scalar a; Vector b ] ->
+        [ (state, map_vector (fun b -> f_scalar a b) b) ]
+    | [ Vector a; Scalar b ] ->
+        [ (state, map_vector (fun a -> f_scalar a b) a) ]
     | [ Vector a; Vector b ] ->
-        (state, map2_vector (fun a b -> f_scalar a b) a b)
+        [ (state, map2_vector (fun a b -> f_scalar a b) a b) ]
     | _ -> failwith "Wrong args"
 
 let make_number_builtin f : builtin_fun =
@@ -23,8 +25,8 @@ let make_number_builtin f : builtin_fun =
   let f_scalar a = SNumber (f (number_of_scalar a)) in
   fun state args ->
     match args with
-    | [ Scalar a ] -> (state, Scalar (f_scalar a))
-    | [ Vector a ] -> (state, map_vector f_scalar a)
+    | [ Scalar a ] -> [ (state, Scalar (f_scalar a)) ]
+    | [ Vector a ] -> [ (state, map_vector f_scalar a) ]
     | _ -> failwith "Wrong args"
 
 (* Level 1 *)
@@ -32,7 +34,7 @@ let make_number_builtin f : builtin_fun =
 let builtin_new_unknown_boolean : builtin_fun =
  fun state args ->
   assert (args = []);
-  (state, Scalar SUnknownBool)
+  [ (state, Scalar SUnknownBool) ]
 
 let builtin_new_vector : builtin_fun =
  fun state args ->
@@ -59,10 +61,10 @@ let builtin_new_vector : builtin_fun =
   let vector_size =
     vec |> seq_of_value (ListForArrayTable.length item_heap_ids) |> Seq.length
   in
-  if vector_size = 1 then (state, vec)
+  if vector_size = 1 then [ (state, vec) ]
   else (
     assert (state.vector_size = 1 || state.vector_size = vector_size);
-    ({ state with vector_size }, vec))
+    [ ({ state with vector_size }, vec) ])
 
 let rec print_to_string arg =
   match arg with
@@ -81,7 +83,7 @@ let builtin_print : builtin_fun =
  fun state args ->
   let arg = match args with [ v ] -> v | _ -> failwith "Wrong args" in
   let state = { state with prints = print_to_string arg :: state.prints } in
-  (state, Scalar (SNil None))
+  [ (state, Scalar (SNil None)) ]
 
 let builtin_print_vector_sorted : builtin_fun =
  fun state args ->
@@ -96,14 +98,14 @@ let builtin_print_vector_sorted : builtin_fun =
     |> String.concat ", "
   in
   let state = { state with prints = s :: state.prints } in
-  (state, Scalar (SNil None))
+  [ (state, Scalar (SNil None)) ]
 
 let builtin_debug : builtin_fun =
  fun state args ->
   Printf.printf "debug: %s\n%!"
   @@ String.concat " "
   @@ List.map (fun arg -> print_to_string arg) args;
-  (state, Scalar (SNil None))
+  [ (state, Scalar (SNil None)) ]
 
 let builtin_array_table_drop_last : builtin_fun =
  fun state args ->
@@ -126,7 +128,7 @@ let builtin_array_table_drop_last : builtin_fun =
       heap = Heap.add table_heap_id (HArrayTable item_heap_ids) state.heap;
     }
   in
-  (state, Scalar (SNil None))
+  [ (state, Scalar (SNil None)) ]
 
 let level_1_builtins =
   [
@@ -195,9 +197,11 @@ let builtin_mget map_data : builtin_fun =
   in
   assert (x >= 0 && x < 128);
   assert (y >= 0 && y < 64);
-  ( state,
-    Scalar (SNumber (Pico_number.of_int @@ Array.get map_data (x + (y * 128))))
-  )
+  [
+    ( state,
+      Scalar
+        (SNumber (Pico_number.of_int @@ Array.get map_data (x + (y * 128)))) );
+  ]
 
 let builtin_fget flag_data : builtin_fun =
  fun state args ->
@@ -209,7 +213,7 @@ let builtin_fget flag_data : builtin_fun =
   in
   assert (b >= 0 && b < 8);
   let v = Array.get flag_data i in
-  (state, Scalar (SBool (Int.logand v (Int.shift_left 1 b) != 0)))
+  [ (state, Scalar (SBool (Int.logand v (Int.shift_left 1 b) != 0))) ]
 
 let load_level_5_builtins () =
   let map_data = load_hex_file "map-data.txt" 8192 in
