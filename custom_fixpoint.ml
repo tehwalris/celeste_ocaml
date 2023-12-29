@@ -87,6 +87,7 @@ struct
       | None -> ()
       | Some wl_node ->
           wl := NodeSet.remove wl_node !wl;
+          let wl_node_entry = nodes.(wl_node) in
 
           let process_node node =
             let node_entry = nodes.(node) in
@@ -104,7 +105,10 @@ struct
               List.iter
                 (fun succ_edge ->
                   m_data_new.(succ_edge) <- A.join m_data_new.(succ_edge) data)
-                node_entry.succ_edges
+                node_entry.succ_edges;
+              List.iter
+                (fun succ_node -> wl := NodeSet.add succ_node !wl)
+                wl_node_entry.succ_nodes
             in
             match m_data_acc.(node) with
             | Some data_acc ->
@@ -119,12 +123,7 @@ struct
                   process_successors potentially_new
           in
 
-          let wl_node_entry = nodes.(wl_node) in
           List.iter process_node wl_node_entry.succ_nodes;
-          List.iter
-            (fun succ_node -> wl := NodeSet.add succ_node !wl)
-            wl_node_entry.succ_nodes;
-
           loop ()
     in
 
