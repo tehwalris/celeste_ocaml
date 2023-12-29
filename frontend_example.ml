@@ -63,12 +63,7 @@ let make_state_abstract (state : Interpreter.state) : Interpreter.state =
            | Some f ->
                Some
                  (heap_ids |> HeapIdSet.to_seq
-                 |> Seq.map (fun heap_id ->
-                        ( heap_id,
-                          fun v ->
-                            Printf.printf "DEBUG applying f for %s to %d\n" mark
-                              heap_id;
-                            f v )))
+                 |> Seq.map (fun heap_id -> (heap_id, f)))
            | None -> None)
     |> Seq.concat |> HeapIdMap.of_seq
   in
