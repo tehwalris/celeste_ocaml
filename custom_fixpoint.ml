@@ -88,11 +88,7 @@ struct
       | Some wl_node ->
           wl := NodeSet.remove wl_node !wl;
 
-          Printf.printf "DEBUG loop wl_node %d\n" wl_node;
-
           let process_node node =
-            Printf.printf "DEBUG process_node %d\n" node;
-
             let node_entry = nodes.(node) in
             let potentially_new =
               List.fold_left
@@ -101,8 +97,6 @@ struct
                   A.join potentially_new edge_data)
                 (node_entry.initial ()) node_entry.pred_edges
             in
-            Printf.printf "DEBUG potentially_new (%s)\n"
-              (if A.is_empty potentially_new then "empty" else "non-empty");
             List.iter
               (fun (pred_edge, _) -> m_data_new.(pred_edge) <- A.empty)
               node_entry.pred_edges;
@@ -144,16 +138,6 @@ struct
     loop ();
     fun original_node ->
       let node = OriginalVertexMap.find original_node nodes_by_original in
-      Printf.printf "DEBUG A %s\n"
-        (match m_data_acc.(node) with
-        | Some d -> Printf.sprintf "Some %s" (A.show_data d)
-        | None -> "None");
-      Printf.printf "DEBUG B %s\n"
-        (m_data_acc
-        |> Array.map (function
-             | Some d -> Printf.sprintf "Some %s" (A.show_data d)
-             | None -> "None")
-        |> Array.to_list |> String.concat "; ");
       Option.get m_data_acc.(node)
 
   let prepare g =
@@ -161,9 +145,7 @@ struct
       Perf.count_and_time Perf.global_counters.fixpoint_prepare (fun () ->
           let nodes_by_original, _ =
             Topological.fold
-              (fun v (m, i) ->
-                Printf.printf "DEBUG node %d %s\n" i (A.show_vertex v);
-                (OriginalVertexMap.add v i m, i + 1))
+              (fun v (m, i) -> (OriginalVertexMap.add v i m, i + 1))
               g
               (OriginalVertexMap.empty, 0)
           in
@@ -173,8 +155,6 @@ struct
               (fun e_src e_dst m ->
                 let i = !next_edge_index_ref in
                 next_edge_index_ref := i + 1;
-                Printf.printf "DEBUG edge %d %s %s\n" i (A.show_vertex e_src)
-                  (A.show_vertex e_dst);
                 OriginalVertexPairMap.add (e_src, e_dst) i m)
               g OriginalVertexPairMap.empty
           in
@@ -198,10 +178,7 @@ struct
                 Some
                   {
                     initial =
-                      (fun () ->
-                        Printf.printf "DEBUG initial %d %s\n" node
-                          (A.show_vertex original_node);
-                        (Option.get !initial_ref) original_node);
+                      (fun () -> (Option.get !initial_ref) original_node);
                     pred_edges =
                       original_node |> G.pred_e g
                       |> List.map (fun original_edge ->
