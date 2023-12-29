@@ -115,6 +115,7 @@ type player_spawn_state_summary = {
 [@@deriving show]
 
 type state_summary = {
+  object_count : int;
   player : player_state_summary option;
   player_spawn : player_spawn_state_summary option;
 }
@@ -152,6 +153,9 @@ let make_state_summary state : state_summary =
   in
 
   {
+    object_count =
+      h.load_global "objects" |> unwrap_pointer |> h.load_array_table
+      |> List.length;
     player =
       h.load_global "player" |> unwrap_pointer |> h.find_objects_by_type
       |> List.map make_player_state_summary
