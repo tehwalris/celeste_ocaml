@@ -49,7 +49,17 @@ let print_step states =
   states |> Interpreter.LazyStateSet.to_normalized_state_set
   |> Interpreter.StateSet.to_seq
   |> Seq.concat_map Interpreter.unvectorize_state
-  |> Seq.iter print_state_summary;
+  |> Seq.map Inspect.make_state_summary
+  |> Seq.fold_left
+       (fun m s ->
+         let old_count =
+           m |> Inspect.StateSummaryMap.find_opt s |> Option.value ~default:0
+         in
+         Inspect.StateSummaryMap.add s (old_count + 1) m)
+       Inspect.StateSummaryMap.empty
+  |> Inspect.StateSummaryMap.iter (fun state_summary count ->
+         Printf.printf "%d %s\n" count
+         @@ Inspect.show_state_summary state_summary);
   Printf.printf "\n%!"
 
 let () =

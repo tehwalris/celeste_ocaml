@@ -120,6 +120,12 @@ type state_summary = {
 }
 [@@deriving show]
 
+module StateSummaryMap = Map.Make (struct
+  type t = state_summary
+
+  let compare = compare
+end)
+
 let make_state_summary state : state_summary =
   let h = make_state_helper state in
 
