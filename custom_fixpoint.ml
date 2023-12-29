@@ -1,33 +1,3 @@
-(* This file has been copied from Ocamlgraph and modified. The original
-   copyright notices are below. *)
-
-(**************************************************************************)
-(*                                                                        *)
-(*  Ocamlgraph: a generic graph library for OCaml                         *)
-(*  Copyright (C) 2004-2010                                               *)
-(*  Sylvain Conchon, Jean-Christophe Filliatre and Julien Signoles        *)
-(*                                                                        *)
-(*  This software is free software; you can redistribute it and/or        *)
-(*  modify it under the terms of the GNU Library General Public           *)
-(*  License version 2.1, with the special exception on linking            *)
-(*  described in file LICENSE.                                            *)
-(*                                                                        *)
-(*  This software is distributed in the hope that it will be useful,      *)
-(*  but WITHOUT ANY WARRANTY; without even the implied warranty of        *)
-(*  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.                  *)
-(*                                                                        *)
-(**************************************************************************)
-
-(* Copyright (c) 2010 - 2012 Technische Universitaet Muenchen
- * Markus W. Weissmann <markus.weissmann@in.tum.de>
- * All rights reserved. *)
-
-(* maximum fixpoint point calculation with the work list algorithm;
-   to implement a concrete analysis, implement a module that satisfies
-   the Rules signature. Such a module in the Analysis functor gives a
-   complete analysis/optimization module that works on a CFG.
-*)
-
 module type Analysis = sig
   type data
   type edge
@@ -64,6 +34,7 @@ module type G = sig
   val iter_vertex : (V.t -> unit) -> t -> unit
   val iter_succ : (V.t -> unit) -> t -> V.t -> unit
   val fold_vertex : (V.t -> 'a -> 'a) -> t -> 'a -> 'a
+  val fold_edges : (V.t -> V.t -> 'a -> 'a) -> t -> 'a -> 'a
   val succ_e : t -> V.t -> E.t list
   val pred_e : t -> V.t -> E.t list
   val succ : t -> V.t -> V.t list
@@ -77,165 +48,155 @@ module Make
            with type edge = G.E.t
            with type vertex = G.V.t) =
 struct
-  module M = Map.Make (G.V)
+  module NodeSet = Set.Make (struct
+    type t = int
 
-  module N = Set.Make (struct
-    type t = int * G.V.t
+    let compare = compare
+  end)
+
+  module OriginalVertexMap = Map.Make (struct
+    type t = G.V.t
+
+    let compare = compare
+  end)
+
+  module OriginalVertexPairMap = Map.Make (struct
+    type t = G.V.t * G.V.t
 
     let compare = compare
   end)
 
   module Topological = Graph.Topological.Make (G)
 
-  let analyze_prepared debug initial g m_data_acc m_data_new nodemap wl =
-    let rec worklist (m_data_acc : A.data M.t) (m_data_new : A.data M.t M.t)
-        (wl : N.t) =
-      (* 'meet' an arbitrary number of data-sets *)
-      let meet initial xs = List.fold_left A.join initial xs in
+  type prepared_node = {
+    initial : unit -> A.data;
+    pred_edges : (int * (A.data -> A.data)) list;
+    succs : int list;
+  }
 
-      (* analyze one node, creating a new data-set and node-worklist
-         as necessary *)
-      let analyze_node analysis n m_data_acc m_data_new wl =
-        match analysis m_data_acc m_data_new n with
-        | None -> (m_data_acc, m_data_new, wl)
-        | Some (m_data_acc, m_data_new) ->
-            ( m_data_acc,
-              m_data_new,
-              let _, i = M.find n nodemap in
-              N.add (i, n) wl )
-      in
+  let analyze_prepared (m_data_acc : A.data option Array.t)
+      (m_data_new : A.data Array.t) (nodes : prepared_node Array.t)
+      (nodes_by_original : int OriginalVertexMap.t) (wl : NodeSet.t) =
+    let m_data_acc = Array.copy m_data_acc in
+    let m_data_new = Array.copy m_data_new in
+    let wl = ref wl in
 
-      (* get some node from the node-set -- this will eventually trigger
-           an exception *)
-      match N.min_elt_opt wl with
-      | None -> m_data_acc
-      | Some (i, n) ->
-          (* remove the chosen node from the set *)
-          let wl = N.remove (i, n) wl in
+    let rec loop () =
+      match NodeSet.min_elt_opt !wl with
+      | None -> ()
+      | Some wl_node ->
+          wl := NodeSet.remove wl_node !wl;
 
-          let f, ns =
-            (* analyze all INCOMING edges of all SUCCESSOR nodes of the
-               node to be processed *)
-            (* process one node: analyze all it's incoming edges
-               and merge the resulting data;
-               if the result is different to the previously stored data
-               for this node, return a new tuple, else None *)
-            let new_node_data (m_data_acc : A.data M.t)
-                (m_data_new : A.data M.t M.t) node =
-              let edges, _ = M.find node nodemap in
-              let analysis =
-                List.map
-                  (fun (f, src) -> M.find src m_data_new |> M.find node |> f)
-                  edges
-              in
-              let m_data_new =
-                List.fold_left
-                  (fun m_data_new (_, src) ->
-                    M.add src
-                      (M.add node A.empty @@ M.find src m_data_new)
-                      m_data_new)
-                  m_data_new edges
-              in
-              let join_to_edges m_data_new d =
-                M.add node
-                  (M.map (fun old_d -> A.join d old_d) (M.find node m_data_new))
-                  m_data_new
-              in
-              let potentially_new = meet (initial node) analysis in
-              match M.find_opt node m_data_acc with
-              | Some data_acc ->
-                  let data_acc', actually_new =
-                    A.accumulate data_acc potentially_new
-                  in
-                  if debug then
-                    Printf.printf
-                      "Analyzing node %s; data_acc = %s; potentially_new = %s; \
-                       data_acc' = %s; actually_new = %s\n"
-                      (A.show_vertex node) (A.show_data data_acc)
-                      (A.show_data potentially_new)
-                      (A.show_data data_acc') (A.show_data actually_new);
-                  if A.is_empty actually_new then None
-                  else
-                    Some
-                      ( M.add node data_acc' m_data_acc,
-                        join_to_edges m_data_new actually_new )
-              | None ->
-                  if A.is_empty potentially_new then None
-                  else
-                    Some (m_data_acc, join_to_edges m_data_new potentially_new)
+          let process_node node =
+            let node_entry = nodes.(node) in
+            let potentially_new =
+              List.fold_left
+                (fun potentially_new (pred_edge, f) ->
+                  let edge_data = f m_data_new.(pred_edge) in
+                  A.join potentially_new edge_data)
+                (node_entry.initial ()) node_entry.pred_edges
             in
-
-            (new_node_data, G.succ g n)
+            List.iter
+              (fun (pred_edge, _) -> m_data_new.(pred_edge) <- A.empty)
+              node_entry.pred_edges;
+            let process_successors data =
+              List.iter
+                (fun succ ->
+                  m_data_new.(succ) <- A.join m_data_new.(succ) data;
+                  wl := NodeSet.add succ !wl)
+                node_entry.succs
+            in
+            match m_data_acc.(node) with
+            | Some data_acc ->
+                let data_acc', actually_new =
+                  A.accumulate data_acc potentially_new
+                in
+                if not (A.is_empty actually_new) then (
+                  m_data_acc.(node) <- Some data_acc';
+                  process_successors actually_new)
+            | None ->
+                if not (A.is_empty potentially_new) then
+                  process_successors potentially_new
           in
-          (* analyze all successor nodes by analyzing all of their
-             predecessor edges *)
-          let m_data_acc, m_data_new, wl =
-            List.fold_left
-              (fun (m_data_acc, m_data_new, wl) n ->
-                analyze_node f n m_data_acc m_data_new wl)
-              (m_data_acc, m_data_new, wl)
-              ns
-          in
 
-          (* do a recursive call: the recursion will eventually end with a
-           * Not_found exception when no nodes are left in the work list *)
-          worklist m_data_acc m_data_new wl
+          let wl_node_data = nodes.(wl_node) in
+          List.iter process_node wl_node_data.succs;
+
+          loop ()
     in
-    let m_data_new =
-      N.fold
-        (fun (_, n) m_data_new ->
-          let v = initial n in
-          M.add n (M.map (fun _ -> v) @@ M.find n m_data_new) m_data_new)
-        wl m_data_new
-    in
-    let m_data_acc = worklist m_data_acc m_data_new wl in
-    fun n -> M.find n m_data_acc
+
+    NodeSet.iter
+      (fun node ->
+        let node_entry = nodes.(node) in
+        List.iter
+          (fun (pred_edge, _) ->
+            m_data_new.(pred_edge) <- node_entry.initial ())
+          node_entry.pred_edges)
+      !wl;
+    loop ();
+    fun original_node ->
+      let node = OriginalVertexMap.find original_node nodes_by_original in
+      Option.get m_data_acc.(node)
 
   let prepare g =
-    let m_data_acc, m_data_new, nodemap, wl =
+    let m_data_acc, m_data_new, nodes, nodes_by_original, wl, initial_ref =
       Perf.count_and_time Perf.global_counters.fixpoint_prepare (fun () ->
-          let nodes, m_data_acc, m_data_new =
-            G.fold_vertex
-              (fun vertex (n, m_data_acc, m_data_new) ->
-                ( (if A.is_input vertex then vertex :: n else n),
-                  (if A.is_output vertex || A.hint_normalize vertex then
-                   M.add vertex A.empty m_data_acc
-                  else m_data_acc),
-                  M.add vertex
-                    (G.succ_e g vertex |> List.to_seq
-                    |> Seq.map (fun edge -> (G.E.dst edge, A.empty))
-                    |> M.of_seq)
-                    m_data_new ))
-              g ([], M.empty, M.empty)
+          let nodes_by_original, _ =
+            Topological.fold
+              (fun v (m, i) -> (OriginalVertexMap.add v i m, i + 1))
+              g
+              (OriginalVertexMap.empty, 0)
           in
-          (* generate an associative map to quickly find the incoming
-           * edges of a node during the anaysis store a pair of
-           * a partially applied analysis function and the corresponding
-           * 'partner' node *)
-          (* the second element of the tuple is used for ordering nodes in the worklist *)
-          let nodemap : (((A.data -> A.data) * G.V.t) list * int) M.t =
-            let add n =
-              let preds = G.pred_e g n in
-              List.map (fun edge -> (A.analyze edge, G.E.src edge)) preds
-            in
-            let nodemap, _ =
-              Topological.fold
-                (fun vertex (m, i) -> (M.add vertex (add vertex, i) m, i + 1))
-                g (M.empty, 0)
-            in
-            nodemap
+          let edges_by_original =
+            let next_edge_index_ref = ref 0 in
+            G.fold_edges
+              (fun e_src e_dst m ->
+                let i = !next_edge_index_ref in
+                next_edge_index_ref := i + 1;
+                OriginalVertexPairMap.add (e_src, e_dst) i m)
+              g OriginalVertexPairMap.empty
           in
 
-          let wl =
-            nodes |> List.to_seq
-            |> Seq.map (fun n ->
-                   let _, i = M.find n nodemap in
-                   (i, n))
-            |> N.of_seq
-          in
+          let node_count = OriginalVertexMap.cardinal nodes_by_original in
+          let edge_count = OriginalVertexPairMap.cardinal edges_by_original in
 
-          (m_data_acc, m_data_new, nodemap, wl))
+          let m_data_acc = Array.make node_count None in
+          let m_data_new = Array.make edge_count A.empty in
+
+          let nodes = Array.make node_count None in
+          let wl = ref NodeSet.empty in
+          let initial_ref = ref None in
+
+          OriginalVertexMap.iter
+            (fun original_node node ->
+              if A.is_input original_node then wl := NodeSet.add node !wl;
+              if A.is_output original_node || A.hint_normalize original_node
+              then m_data_acc.(node) <- Some A.empty;
+              nodes.(node) <-
+                Some
+                  {
+                    initial = (fun () -> Option.get !initial_ref original_node);
+                    pred_edges =
+                      original_node |> G.pred_e g
+                      |> List.map (fun original_edge ->
+                             ( OriginalVertexPairMap.find
+                                 (G.E.src original_edge, G.E.dst original_edge)
+                                 edges_by_original,
+                               A.analyze original_edge ));
+                    succs =
+                      original_node |> G.succ g
+                      |> List.map (fun original_succ ->
+                             OriginalVertexMap.find original_succ
+                               nodes_by_original);
+                  })
+            nodes_by_original;
+
+          let nodes = Array.map Option.get nodes in
+          let wl = !wl in
+
+          (m_data_acc, m_data_new, nodes, nodes_by_original, wl, initial_ref))
     in
-    fun initial debug ->
-      analyze_prepared debug initial g m_data_acc m_data_new nodemap wl
+    fun initial ->
+      initial_ref := Some initial;
+      analyze_prepared m_data_acc m_data_new nodes nodes_by_original wl
 end

@@ -842,7 +842,6 @@ type prepared_cfg = {
   cfg : Ir.cfg;
   analyze :
     (Block_flow.flow_node -> StateAndMaybeReturnSet.t option) ->
-    bool ->
     Block_flow.flow_node ->
     StateAndMaybeReturnSet.t option;
   is_noop : bool;
@@ -1435,7 +1434,7 @@ and interpret_cfg (states : LazyStateSet.t) (cfg : prepared_cfg) :
   in
   Perf.count_and_time cfg.counter_ref @@ fun () ->
   Perf.count_and_time Perf.global_counters.fixpoint @@ fun () ->
-  Option.get @@ cfg.analyze init !debug_prints Block_flow.Return
+  Option.get @@ cfg.analyze init Block_flow.Return
 
 let prepare_fixpoint (cfg : Ir.cfg) (fixed_env_ref : fixed_env ref) =
   let lift_no_return (counter : Perf.timed_counter ref)
