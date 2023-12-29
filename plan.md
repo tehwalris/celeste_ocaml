@@ -4,12 +4,17 @@
   - [x] run and optimize microbenchmarks like "foreach"
 - [x] run one "frame" of the game
   - [x] write the standard library to support this
-- [ ] support reading uninitialized globals and fields
-- [ ] run the game past the tile screen
+- [x] support reading uninitialized globals and fields
+- [x] run the game past the tile screen
+- [ ] support marking heap ids
+- [ ] summarize state and print that
+- [ ] generate image from state summaries
+- [ ] dump states as json
+- [ ] pass that makes marked variables abstract
 - [ ] step-by-step graph exploration (using some kind of "origin state index" in states)
   - [ ] run this and have it be really slow
-- [ ] vectorize on cpu
-  - [ ] run this and have it be faster
+- [x] vectorize on cpu
+  - [x] run this and have it be faster
 - [ ] future stuff where the order is less clear
   - [ ] vectorize on gpu
   - [ ] support abstract ranges
