@@ -14,7 +14,9 @@ type state_helper = {
   find_global : string -> int;
   load : int -> Interpreter.heap_value;
   load_global : string -> Interpreter.heap_value;
+  load_array_table_partial : int -> int list;
   load_array_table : int -> Interpreter.heap_value list;
+  load_object_table_partial : int -> int StringMap.t;
   load_object_table : int -> Interpreter.heap_value StringMap.t;
   find_objects_by_type : int -> int list;
 }
@@ -23,27 +25,31 @@ let make_state_helper state =
   let find_global name = StringMap.find name state.Interpreter.global_env in
   let load heap_id = Interpreter.Heap.find heap_id state.Interpreter.heap in
   let load_global name = name |> find_global |> load in
-  let load_array_table table_heap_id =
+  let load_array_table_partial table_heap_id =
     match load table_heap_id with
     | Interpreter.HArrayTable l ->
-        l |> Interpreter.ListForArrayTable.to_seq |> Seq.map load |> List.of_seq
+        l |> Interpreter.ListForArrayTable.to_seq |> List.of_seq
     | Interpreter.HUnknownTable -> []
     | v ->
         failwith
         @@ Printf.sprintf "Expected HArrayTable or HUnknownTable, got %s"
         @@ Interpreter.show_heap_value v
   in
-  let load_object_table table_heap_id =
+  let load_array_table table_heap_id =
+    table_heap_id |> load_array_table_partial |> List.map load
+  in
+  let load_object_table_partial table_heap_id =
     match load table_heap_id with
     | Interpreter.HObjectTable l ->
-        l |> List.to_seq
-        |> Seq.map (fun (k, v) -> (k, load v))
-        |> StringMap.of_seq
+        l |> List.to_seq |> Seq.map (fun (k, v) -> (k, v)) |> StringMap.of_seq
     | Interpreter.HUnknownTable -> StringMap.empty
     | v ->
         failwith
         @@ Printf.sprintf "Expected HObjectTable or HUnknownTable, got %s"
         @@ Interpreter.show_heap_value v
+  in
+  let load_object_table table_heap_id =
+    table_heap_id |> load_object_table_partial |> StringMap.map load
   in
 
   let find_objects_by_type type_heap_id =
@@ -58,7 +64,9 @@ let make_state_helper state =
     find_global;
     load;
     load_global;
+    load_array_table_partial;
     load_array_table;
+    load_object_table_partial;
     load_object_table;
     find_objects_by_type;
   }
@@ -74,9 +82,16 @@ let mark_heap state =
 
   let h = make_state_helper state in
 
-  (* TODO mark rem_xy *)
   h.load_global "player" |> unwrap_pointer |> h.find_objects_by_type
-  |> List.iter (mark "player");
+  |> List.iter (fun player_heap_id ->
+         let player = h.load_object_table player_heap_id in
+         let rem =
+           player |> StringMap.find "rem" |> unwrap_pointer
+           |> h.load_object_table_partial
+         in
+         List.iter
+           (fun k -> StringMap.find k rem |> mark "player_rem_xy")
+           [ "x"; "y" ]);
 
   !marks
 

@@ -29,7 +29,7 @@ let make_heap_value_abstract_by_mark :
     (Interpreter.heap_value -> Interpreter.heap_value) StringMap.t =
   let funcs =
     [
-      ( "rem_xy",
+      ( "player_rem_xy",
         let half = Pico_number.of_string "0.5" in
         assert (Pico_number.add half half = Pico_number.of_int 1);
         let neg_half = Pico_number.neg half in
@@ -63,7 +63,12 @@ let make_state_abstract (state : Interpreter.state) : Interpreter.state =
            | Some f ->
                Some
                  (heap_ids |> HeapIdSet.to_seq
-                 |> Seq.map (fun heap_id -> (heap_id, f)))
+                 |> Seq.map (fun heap_id ->
+                        ( heap_id,
+                          fun v ->
+                            Printf.printf "DEBUG applying f for %s to %d\n" mark
+                              heap_id;
+                            f v )))
            | None -> None)
     |> Seq.concat |> HeapIdMap.of_seq
   in
@@ -162,6 +167,5 @@ let () =
   print_step !states;
   for i = 1 to 100 do
     Printf.printf "Frame %d\n%!" i;
-    states := run_step frame_cfg !states !fixed_env_ref;
-    print_step !states
+    states := run_step frame_cfg !states !fixed_env_ref (* print_step !states *)
   done
