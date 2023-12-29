@@ -1,6 +1,7 @@
 (* TODO WARNING some of these pico_number functions probably have mistakes*)
 
 type t = Int32.t [@@deriving show, ord]
+type outer_t = t [@@deriving show, ord]
 
 (*
 Binary representation of PICO-8 numbers:
@@ -53,6 +54,7 @@ let int_of (n : t) : int =
   assert (fraction_int_of n = 0);
   whole_int_of n
 
+let zero = of_int 0
 let equal = Int32.equal
 let below (v : t) = Int32.sub v (Int32.of_int 1)
 let above (v : t) = Int32.add v (Int32.of_int 1)

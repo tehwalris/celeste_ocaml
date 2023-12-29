@@ -13,7 +13,8 @@
   liveness
   lua_tests
   perf
-  pico_number)
+  pico_number
+  pico_number_interval)
  (libraries
   bigarray
   lua_parser.lib

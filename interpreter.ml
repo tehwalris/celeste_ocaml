@@ -12,6 +12,7 @@ let gen_heap_id : unit -> heap_id =
 
 type scalar_value =
   | SNumber of Pico_number.t
+  | SNumberInterval of Pico_number_interval.t
   | SBool of bool
   | SUnknownBool
   | SString of string
@@ -305,6 +306,7 @@ let state_heap_update (state : state) (update : heap_value -> heap_value)
 let map_value_references f v : value =
   match v with
   | Scalar (SNumber _) -> v
+  | Scalar (SNumberInterval _) -> v
   | Scalar (SBool _) -> v
   | Scalar SUnknownBool -> v
   | Scalar (SString _) -> v
@@ -697,7 +699,9 @@ let zip_map_state_values (f : (value * int) list -> value) (shape : state)
 
 let rec normalize_value_for_shape = function
   | v when not @@ can_vectorize_value v -> v
-  | Scalar (SNumber _) -> Scalar (SNumber (Pico_number.of_int 0))
+  | Scalar (SNumber _) -> Scalar (SNumber Pico_number.zero)
+  | Scalar (SNumberInterval _) ->
+      Scalar (SNumberInterval (Pico_number_interval.of_number Pico_number.zero))
   | Scalar (SBool _) -> Scalar (SBool false)
   | Scalar SUnknownBool -> Scalar (SBool false)
   | Scalar (SString _) -> Scalar (SString "")
@@ -927,6 +931,7 @@ let interpret_binary_op_scalar (l : scalar_value) (op : string)
   let is_simple_value v =
     match v with
     | SNumber _ -> true
+    | SNumberInterval _ -> false
     | SBool _ -> true
     | SUnknownBool -> false
     | SString _ -> true
