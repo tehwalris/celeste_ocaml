@@ -159,6 +159,7 @@ let%test_unit _ =
   test_against_real_lua "call_with_different_number_of_args.lua" false
 
 let%test_unit _ = test_against_real_lua "every_kind_of_if_else.lua" false
+let%test_unit _ = test_against_real_lua "for_break.lua" false
 let%test_unit _ = test_against_real_lua "for_range.lua" true
 let%test_unit _ = test_against_real_lua "foreach.lua" true
 let%test_unit _ = test_against_real_lua "hello_world.lua" false
