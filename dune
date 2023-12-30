@@ -24,7 +24,8 @@
   ocaml-lua
   re
   mtime
-  mtime.clock.os)
+  mtime.clock.os
+  camlimages)
  (inline_tests
   (deps
    (glob_files lua_tests/*.lua)
