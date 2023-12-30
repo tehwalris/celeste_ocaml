@@ -25,9 +25,12 @@ let float_of (n : t) : float =
   let fraction = Float.of_int @@ fraction_int_of n in
   whole +. (fraction /. 65536.)
 
-let pp (f : Format.formatter) (n : t) =
-  Format.fprintf f "(pico_number %d + (%d / 65536))" (whole_int_of n)
+let debug_string_of (n : t) : string =
+  Format.sprintf "(pico_number %d + (%d / 65536))" (whole_int_of n)
     (fraction_int_of n)
+
+let pp (f : Format.formatter) (n : t) =
+  Format.fprintf f "%s" @@ debug_string_of n
 
 let of_ints (whole_n : int) (fraction_n : int) : t =
   assert (whole_n >= -32768 && whole_n < 32768);

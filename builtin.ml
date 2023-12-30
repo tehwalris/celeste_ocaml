@@ -69,23 +69,32 @@ let builtin_new_vector : builtin_fun =
     assert (state.vector_size = 1 || state.vector_size = vector_size);
     [ ({ state with vector_size }, vec) ])
 
-let rec print_to_string arg =
+let rec print_to_string debug arg =
   match arg with
-  | Scalar (SNumber n) -> Int.to_string @@ Pico_number.int_of n
+  | Scalar (SNumber n) ->
+      if Pico_number.fraction_int_of n = 0 then
+        string_of_int @@ Pico_number.int_of n
+      else if debug then Pico_number.debug_string_of n
+      else
+        failwith
+          "Printing fractional numbers is currently only supported in debug \
+           mode"
   | Scalar (SBool b) -> if b then "true" else "false"
   | Scalar (SString s) -> s
   | Scalar (SNil _) -> "nil"
   | Vector vec ->
       Printf.sprintf "V[%s]" @@ String.concat ", "
       @@ (vec |> seq_of_vector
-         |> Seq.map (fun v -> print_to_string (Scalar v))
+         |> Seq.map (fun v -> print_to_string debug (Scalar v))
          |> List.of_seq)
   | _ -> failwith "Wrong args"
 
 let builtin_print : builtin_fun =
  fun state args ->
   let arg = match args with [ v ] -> v | _ -> failwith "Wrong args" in
-  let state = { state with prints = print_to_string arg :: state.prints } in
+  let state =
+    { state with prints = print_to_string false arg :: state.prints }
+  in
   [ (state, Scalar (SNil None)) ]
 
 let builtin_print_vector_sorted : builtin_fun =
@@ -107,7 +116,7 @@ let builtin_debug : builtin_fun =
  fun state args ->
   Printf.printf "debug: %s\n%!"
   @@ String.concat " "
-  @@ List.map (fun arg -> print_to_string arg) args;
+  @@ List.map (fun arg -> print_to_string true arg) args;
   [ (state, Scalar (SNil None)) ]
 
 let builtin_array_table_drop_last : builtin_fun =
