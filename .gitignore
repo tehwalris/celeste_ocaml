@@ -3,6 +3,7 @@ _build
 /profile.txt
 /perf.data
 /perf.data.old
+/output
 /output.txt
 /a.txt
 /b.txt

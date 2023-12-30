@@ -128,6 +128,40 @@ let print_step states =
          @@ Inspect.show_state_summary state_summary);
   Printf.printf "\n%!"
 
+let write_debug_image (i_frame : int) (states : Interpreter.LazyStateSet.t) =
+  let min_coord = -32 in
+  let max_coord = 144 in
+  let img_size = max_coord - min_coord in
+
+  let coord_to_pixel_index v =
+    let i = v - min_coord in
+    assert (i >= 0 && i < img_size);
+    i
+  in
+
+  let img = Rgb24.create img_size img_size in
+
+  for x = 0 to img_size - 1 do
+    for y = 0 to img_size - 1 do
+      Rgb24.set img x y { r = 0; g = 0; b = 0 }
+    done
+  done;
+
+  states |> Interpreter.LazyStateSet.to_non_normalized_non_deduped_seq
+  |> Seq.concat_map Interpreter.unvectorize_state
+  |> Seq.iter (fun state ->
+         let summary = Inspect.make_state_summary state in
+         match summary.player with
+         | Some { x; y } ->
+             let x = coord_to_pixel_index @@ Pico_number.int_of x in
+             let y = coord_to_pixel_index @@ Pico_number.int_of y in
+             Rgb24.set img x y { r = 255; g = 255; b = 255 }
+         | None -> ());
+
+  Bmp.save
+    (Printf.sprintf "output/frame_%04d.bmp" i_frame)
+    [] (Images.Rgb24 img)
+
 let () =
   let lua_code = BatFile.with_file_in "celeste-minimal.lua" BatIO.read_all in
   let ast =
@@ -168,5 +202,6 @@ let () =
   for i = 1 to 100 do
     Printf.printf "Frame %d\n%!" i;
     states := run_step frame_cfg !states !fixed_env_ref;
-    print_step !states
+    print_step !states;
+    write_debug_image i !states
   done
