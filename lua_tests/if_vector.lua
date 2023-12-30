@@ -13,11 +13,14 @@ if (low + 1) < high then
   __print("below")
   __print(low)
 end
+__print(low)
 
 -- Expected output option:
 -- V[0, 1]
 -- below
 -- 0
+-- 0
 
 -- Expected output option:
 -- V[0, 1]
+-- 1

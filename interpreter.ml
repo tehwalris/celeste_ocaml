@@ -159,8 +159,7 @@ let map2_vector (f : scalar_value -> scalar_value -> scalar_value) vec1 vec2 =
   let length1 = length_of_vector vec1 in
   let length2 = length_of_vector vec2 in
   assert (length1 = length2);
-  seq_of_vector vec1
-  |> Seq.zip (seq_of_vector vec2)
+  Seq.zip (seq_of_vector vec1) (seq_of_vector vec2)
   |> Seq.map (fun (v1, v2) -> f v1 v2)
   |> value_of_non_empty_seq
 

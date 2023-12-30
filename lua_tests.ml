@@ -184,6 +184,7 @@ let%test_unit _ = test_branch_prints "abstract_boolean.lua" false
 let%test_unit _ = test_branch_prints "for_range_vector_both.lua" true
 let%test_unit _ = test_branch_prints "for_range_vector_low.lua" true
 let%test_unit _ = test_branch_prints "if_vector.lua" true
+let%test_unit _ = test_branch_prints "less_than.lua" true
 let%test_unit _ = test_branch_prints "vector_branch.lua" true
 let%test_unit _ = test_branch_prints "vector.lua" true
 let%test_unit _ = test_branch_count "branching_with_irrelevant_locals.lua" 1
