@@ -11,6 +11,7 @@ depends: [
   "ocaml-lua" {>= "1.8"}
   "re" {>= "1.11.0"}
   "mtime" {>= "2.0.0"}
+  "camlimages" {>= "5.0.5"}
   "odoc" {with-doc}
 ]
 build: [

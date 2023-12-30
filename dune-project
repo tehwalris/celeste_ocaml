@@ -14,4 +14,5 @@
     (ppx_inline_test (>= 0.14.1))
     (ocaml-lua (>= 1.8))
     (re (>= 1.11.0))
-    (mtime (>= 2.0.0))))
+    (mtime (>= 2.0.0))
+    (camlimages (>= 5.0.5))))
