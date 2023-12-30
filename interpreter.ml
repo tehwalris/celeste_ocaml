@@ -490,6 +490,9 @@ module LazyStateSet = struct
 
   let normalize (t : t) : t = NormalizedSet (to_normalized_state_set t)
 
+  let normalize_no_dedup (t : t) : t =
+    NormalizedList (to_normalized_non_deduped_seq t |> List.of_seq)
+
   let union (a : t) (b : t) : t =
     if is_empty a then b
     else if is_empty b then a

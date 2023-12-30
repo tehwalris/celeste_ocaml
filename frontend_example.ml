@@ -86,16 +86,29 @@ let make_state_abstract (state : Interpreter.state) : Interpreter.state =
 
 let run_step cfg states fixed_env =
   Perf.reset_counters ();
-  let states_and_maybe_returns = Interpreter.interpret_cfg states cfg in
+  let states =
+    states |> Interpreter.LazyStateSet.to_non_normalized_non_deduped_seq
+    |> Seq.mapi (fun i state -> (i, state))
+    |> Seq.concat_map (fun (i, state) ->
+           Printf.printf "Processing state %d with vector size %d\n%!" i
+             state.Interpreter.vector_size;
+           let states_and_maybe_returns =
+             Interpreter.interpret_cfg
+               (Interpreter.LazyStateSet.of_list [ state ])
+               cfg
+           in
+           match states_and_maybe_returns with
+           | Interpreter.StateAndMaybeReturnSet.StateSet states ->
+               states
+               |> Interpreter.LazyStateSet.to_non_normalized_non_deduped_seq
+           | Interpreter.StateAndMaybeReturnSet.StateAndReturnSet _ ->
+               failwith "Unexpected return value")
+    |> List.of_seq
+  in
   Perf.print_counters ();
   print_lua_perf_counters fixed_env;
-  let states =
-    match states_and_maybe_returns with
-    | Interpreter.StateAndMaybeReturnSet.StateSet states -> states
-    | Interpreter.StateAndMaybeReturnSet.StateAndReturnSet _ ->
-        failwith "Unexpected return value"
-  in
-  states |> Interpreter.LazyStateSet.to_normalized_non_deduped_seq
+  states |> Interpreter.LazyStateSet.of_list
+  |> Interpreter.LazyStateSet.to_normalized_non_deduped_seq
   |> Seq.map make_state_abstract
   |> List.of_seq |> Interpreter.LazyStateSet.of_list
   |> Interpreter.vectorize_states
