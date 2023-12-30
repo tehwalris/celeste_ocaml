@@ -1,11 +1,11 @@
 open Interpreter
 
-let make_number_number_builtin f : builtin_fun =
+let make_number_number_any_return_builtin f : builtin_fun =
   let number_of_scalar = function
     | SNumber v -> v
     | _ -> failwith "Some arguments are not numbers"
   in
-  let f_scalar a b = SNumber (f (number_of_scalar a) (number_of_scalar b)) in
+  let f_scalar a b = f (number_of_scalar a) (number_of_scalar b) in
   fun state args ->
     match args with
     | [ Scalar a; Scalar b ] -> [ (state, Scalar (f_scalar a b)) ]
@@ -16,6 +16,9 @@ let make_number_number_builtin f : builtin_fun =
     | [ Vector a; Vector b ] ->
         [ (state, map2_vector (fun a b -> f_scalar a b) a b) ]
     | _ -> failwith "Wrong args"
+
+let make_number_number_builtin f : builtin_fun =
+  make_number_number_any_return_builtin (fun a b -> SNumber (f a b))
 
 let make_number_builtin f : builtin_fun =
   let number_of_scalar = function
@@ -290,33 +293,21 @@ let load_hex_file name size =
   assert (Array.length data = size);
   data
 
-let builtin_mget map_data : builtin_fun =
- fun state args ->
-  let x, y =
-    match args with
-    | [ Scalar (SNumber x); Scalar (SNumber y) ] ->
-        (Pico_number.int_of x, Pico_number.int_of y)
-    | _ -> failwith "Wrong args"
-  in
-  assert (x >= 0 && x < 128);
-  assert (y >= 0 && y < 64);
-  [
-    ( state,
-      Scalar
-        (SNumber (Pico_number.of_int @@ Array.get map_data (x + (y * 128)))) );
-  ]
+let builtin_mget map_data =
+  make_number_number_builtin (fun x y ->
+      let x = Pico_number.int_of x in
+      let y = Pico_number.int_of y in
+      assert (x >= 0 && x < 128);
+      assert (y >= 0 && y < 64);
+      Pico_number.of_int @@ Array.get map_data (x + (y * 128)))
 
-let builtin_fget flag_data : builtin_fun =
- fun state args ->
-  let i, b =
-    match args with
-    | [ Scalar (SNumber i); Scalar (SNumber b) ] ->
-        (Pico_number.int_of i, Pico_number.int_of b)
-    | _ -> failwith "Wrong args"
-  in
-  assert (b >= 0 && b < 8);
-  let v = Array.get flag_data i in
-  [ (state, Scalar (SBool (Int.logand v (Int.shift_left 1 b) != 0))) ]
+let builtin_fget flag_data =
+  make_number_number_any_return_builtin (fun i b ->
+      let i = Pico_number.int_of i in
+      let b = Pico_number.int_of b in
+      assert (b >= 0 && b < 8);
+      let v = Array.get flag_data i in
+      SBool (Int.logand v (Int.shift_left 1 b) != 0))
 
 let load_level_5_builtins () =
   let map_data = load_hex_file "map-data.txt" 8192 in
