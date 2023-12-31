@@ -28,7 +28,8 @@ type counters = {
   (* Normal counters *)
   interpret_non_phi_instruction : timed_counter ref;
   handle_separately_no_phi : timed_counter ref;
-  builtin_call : int ref;
+  call_misc_internals : timed_counter ref;
+  builtin_call : timed_counter ref;
   closure_call : timed_counter ref;
   closure_call_noop : int ref;
   closure_call_prepare_inner_states : timed_counter ref;
@@ -60,7 +61,8 @@ let global_counters : counters =
     reset_at = ref @@ Mtime_clock.counter ();
     interpret_non_phi_instruction = ref empty_timed_counter;
     handle_separately_no_phi = ref empty_timed_counter;
-    builtin_call = ref 0;
+    call_misc_internals = ref empty_timed_counter;
+    builtin_call = ref empty_timed_counter;
     closure_call = ref empty_timed_counter;
     closure_call_noop = ref 0;
     closure_call_prepare_inner_states = ref empty_timed_counter;
@@ -110,7 +112,10 @@ let print_counters () =
   @@ show_timed_counter !(global_counters.interpret_non_phi_instruction);
   Printf.printf "  handle_separately_no_phi: %s\n"
   @@ show_timed_counter !(global_counters.handle_separately_no_phi);
-  Printf.printf "  builtin_call: %d\n" !(global_counters.builtin_call);
+  Printf.printf "  call_misc_internals: %s\n"
+  @@ show_timed_counter !(global_counters.call_misc_internals);
+  Printf.printf "  builtin_call: %s\n"
+  @@ show_timed_counter !(global_counters.builtin_call);
   Printf.printf "  closure_call: %s\n"
   @@ show_timed_counter !(global_counters.closure_call);
   Printf.printf "  closure_call_noop: %d\n" !(global_counters.closure_call_noop);
@@ -168,7 +173,8 @@ let reset_counters () =
   global_counters.reset_at := Mtime_clock.counter ();
   global_counters.interpret_non_phi_instruction := empty_timed_counter;
   global_counters.handle_separately_no_phi := empty_timed_counter;
-  global_counters.builtin_call := 0;
+  global_counters.call_misc_internals := empty_timed_counter;
+  global_counters.builtin_call := empty_timed_counter;
   global_counters.closure_call := empty_timed_counter;
   global_counters.closure_call_noop := 0;
   global_counters.closure_call_prepare_inner_states := empty_timed_counter;

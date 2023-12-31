@@ -1195,6 +1195,8 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
       handle_separately_no_phi (fun state -> (state, Some (Scalar (SNil None))))
   | Call (fun_local_id, arg_local_ids) ->
       let states_by_function =
+        Perf.count_and_time Perf.global_counters.call_misc_internals
+        @@ fun () ->
         List.fold_left
           (fun states_by_function state ->
             let fun_heap_id = heap_id_from_pointer_local state fun_local_id in
@@ -1211,19 +1213,22 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
         states_by_function |> HeapValueMap.to_seq
         |> Seq.concat_map (fun (fun_heap_value, states) ->
                let arg_values_of_state state =
+                 Perf.count_and_time Perf.global_counters.call_misc_internals
+                 @@ fun () ->
                  List.map
                    (fun id -> Ir.LocalIdMap.find id state.local_env)
                    arg_local_ids
                in
                match fun_heap_value with
                | HBuiltinFun name ->
-                   incr_mut Perf.global_counters.builtin_call;
+                   Perf.count_and_time Perf.global_counters.builtin_call
+                   @@ fun () ->
                    let builtin_fun = Hashtbl.find fixed_env.builtin_funs name in
-                   states |> List.to_seq
-                   |> Seq.concat_map (fun state ->
-                          state |> arg_values_of_state |> builtin_fun state
-                          |> List.to_seq)
-                   |> Seq.map (fun (state, result) -> (state, Some result))
+                   states
+                   |> List.concat_map (fun state ->
+                          state |> arg_values_of_state |> builtin_fun state)
+                   |> List.map (fun (state, result) -> (state, Some result))
+                   |> List.to_seq
                | HClosure (fun_global_id, captured_values) ->
                    Perf.count_and_time Perf.global_counters.closure_call
                    @@ fun () ->
@@ -1288,6 +1293,8 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                      Perf.count_and_time
                        Perf.global_counters.closure_call_process_inner_results
                      @@ fun () ->
+                     (* HACK force evaluation using "|> List.of_seq |>
+                        List.to_seq" so that performance timings can be taken *)
                      inner_result
                      |> (function
                           | StateAndMaybeReturnSet.StateSet inner_states ->
@@ -1313,6 +1320,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                               }
                             in
                             (state, Some return_value))
+                     |> List.of_seq |> List.to_seq
                | _ -> failwith "Calling something that's not a function")
         |> List.of_seq
       in
