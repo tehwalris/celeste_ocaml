@@ -1601,10 +1601,6 @@ let prepare_fixpoint (cfg : Ir.cfg) (fixed_env_ref : fixed_env ref) =
       end)
   in
   let g = Block_flow.flow_graph_of_cfg cfg in
-  add_to_mut Perf.global_counters.fixpoint_created_node
-  @@ Block_flow.G.nb_vertex g;
-  add_to_mut Perf.global_counters.fixpoint_created_edge
-  @@ Block_flow.G.nb_edges g;
   CfgFixpoint.prepare g
 
 let prepare_cfg (cfg : Ir.cfg) (fixed_env_ref : fixed_env ref) : prepared_cfg =

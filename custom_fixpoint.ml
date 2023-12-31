@@ -75,6 +75,10 @@ struct
     succ_edges : int list;
   }
 
+  let time_internals f =
+    Perf.count_and_time_with_options ~allow_recursion:false
+      Perf.global_counters.fixpoint_internals f
+
   let analyze_prepared (m_data_acc : A.data option Array.t)
       (m_data_new : A.data Array.t) (nodes : prepared_node Array.t)
       (nodes_by_original : int OriginalVertexMap.t) (wl : NodeSet.t) =
@@ -83,20 +87,27 @@ struct
     let wl = ref wl in
 
     let rec loop () =
-      match NodeSet.min_elt_opt !wl with
+      let wl_node = time_internals @@ fun () -> NodeSet.min_elt_opt !wl in
+      match wl_node with
       | None -> ()
       | Some wl_node ->
-          wl := NodeSet.remove wl_node !wl;
-          let wl_node_entry = nodes.(wl_node) in
+          let wl_node_entry =
+            time_internals @@ fun () ->
+            wl := NodeSet.remove wl_node !wl;
+            nodes.(wl_node)
+          in
 
           let process_node node =
-            let node_entry = nodes.(node) in
+            let node_entry = time_internals @@ fun () -> nodes.(node) in
+            let potentially_new_separate =
+              List.map
+                (fun (pred_edge, f) -> f m_data_new.(pred_edge))
+                node_entry.pred_edges
+            in
+            time_internals @@ fun () ->
             let potentially_new =
-              List.fold_left
-                (fun potentially_new (pred_edge, f) ->
-                  let edge_data = f m_data_new.(pred_edge) in
-                  A.join potentially_new edge_data)
-                (node_entry.initial ()) node_entry.pred_edges
+              List.fold_left A.join (node_entry.initial ())
+                potentially_new_separate
             in
             List.iter
               (fun (pred_edge, _) -> m_data_new.(pred_edge) <- A.empty)
@@ -127,13 +138,14 @@ struct
           loop ()
     in
 
-    NodeSet.iter
-      (fun node ->
-        let node_entry = nodes.(node) in
-        List.iter
-          (fun succ_edge -> m_data_new.(succ_edge) <- node_entry.initial ())
-          node_entry.succ_edges)
-      !wl;
+    time_internals (fun () ->
+        NodeSet.iter
+          (fun node ->
+            let node_entry = nodes.(node) in
+            List.iter
+              (fun succ_edge -> m_data_new.(succ_edge) <- node_entry.initial ())
+              node_entry.succ_edges)
+          !wl);
     loop ();
     fun original_node ->
       let node = OriginalVertexMap.find original_node nodes_by_original in

@@ -44,9 +44,8 @@ type counters = {
   flow_analyze_flow_branch : timed_counter ref;
   flow_analyze_flow_return : timed_counter ref;
   fixpoint : timed_counter ref;
-  fixpoint_created_node : int ref;
-  fixpoint_created_edge : int ref;
   fixpoint_prepare : timed_counter ref;
+  fixpoint_internals : timed_counter ref;
   cbr_filter : timed_counter ref;
   filter_vector : int ref;
   filter_vector_real : int ref;
@@ -77,9 +76,8 @@ let global_counters : counters =
     flow_analyze_flow_branch = ref empty_timed_counter;
     flow_analyze_flow_return = ref empty_timed_counter;
     fixpoint = ref empty_timed_counter;
-    fixpoint_created_node = ref 0;
-    fixpoint_created_edge = ref 0;
     fixpoint_prepare = ref empty_timed_counter;
+    fixpoint_internals = ref empty_timed_counter;
     cbr_filter = ref empty_timed_counter;
     filter_vector = ref 0;
     filter_vector_real = ref 0;
@@ -141,12 +139,10 @@ let print_counters () =
   @@ show_timed_counter !(global_counters.flow_analyze_flow_return);
   Printf.printf "  fixpoint %s\n"
   @@ show_timed_counter !(global_counters.fixpoint);
-  Printf.printf "  fixpoint_created_node: %d\n"
-    !(global_counters.fixpoint_created_node);
-  Printf.printf "  fixpoint_created_edge: %d\n"
-    !(global_counters.fixpoint_created_edge);
   Printf.printf "  fixpoint_prepare: %s\n"
   @@ show_timed_counter !(global_counters.fixpoint_prepare);
+  Printf.printf "  fixpoint_internals %s\n"
+  @@ show_timed_counter !(global_counters.fixpoint_internals);
   Printf.printf "  cbr_filter: %s\n"
   @@ show_timed_counter !(global_counters.cbr_filter);
   Printf.printf "  filter_vector: %d\n" !(global_counters.filter_vector);
@@ -188,16 +184,17 @@ let reset_counters () =
   global_counters.flow_analyze_flow_branch := empty_timed_counter;
   global_counters.flow_analyze_flow_return := empty_timed_counter;
   global_counters.fixpoint := empty_timed_counter;
-  global_counters.fixpoint_created_node := 0;
-  global_counters.fixpoint_created_edge := 0;
   global_counters.fixpoint_prepare := empty_timed_counter;
+  global_counters.fixpoint_internals := empty_timed_counter;
   global_counters.cbr_filter := empty_timed_counter;
   global_counters.filter_vector := 0;
   global_counters.filter_vector_real := 0;
   List.iter (fun c -> c := empty_timed_counter) !(global_counters.lua_functions)
 
-let count_and_time (c : timed_counter ref) f =
+let count_and_time_with_options ~(allow_recursion : bool)
+    (c : timed_counter ref) f =
   let is_top_level = Option.is_none !c.top_level_timer in
+  assert (allow_recursion || is_top_level);
   c := { !c with start_count = !c.start_count + 1 };
   let timer = Mtime_clock.counter () in
   if is_top_level then c := { !c with top_level_timer = Some timer };
@@ -213,3 +210,5 @@ let count_and_time (c : timed_counter ref) f =
         top_level_end_count = !c.top_level_end_count + 1;
       };
   res
+
+let count_and_time c f = count_and_time_with_options ~allow_recursion:true c f
