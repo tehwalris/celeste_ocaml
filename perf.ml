@@ -28,6 +28,17 @@ type counters = {
   (* Normal counters *)
   interpret_non_phi_instruction : timed_counter ref;
   handle_separately_no_phi : timed_counter ref;
+  instruction_alloc : timed_counter ref;
+  instruction_get_global : timed_counter ref;
+  instruction_load : timed_counter ref;
+  instruction_store : timed_counter ref;
+  instruction_store_empty_table : timed_counter ref;
+  instruction_store_closure : timed_counter ref;
+  instruction_get_field : timed_counter ref;
+  instruction_get_index : timed_counter ref;
+  instruction_constant : timed_counter ref;
+  instruction_unary_op : timed_counter ref;
+  instruction_binary_op : timed_counter ref;
   call_misc_internals : timed_counter ref;
   builtin_call : timed_counter ref;
   closure_call : timed_counter ref;
@@ -61,6 +72,17 @@ let global_counters : counters =
     reset_at = ref @@ Mtime_clock.counter ();
     interpret_non_phi_instruction = ref empty_timed_counter;
     handle_separately_no_phi = ref empty_timed_counter;
+    instruction_alloc = ref empty_timed_counter;
+    instruction_get_global = ref empty_timed_counter;
+    instruction_load = ref empty_timed_counter;
+    instruction_store = ref empty_timed_counter;
+    instruction_store_empty_table = ref empty_timed_counter;
+    instruction_store_closure = ref empty_timed_counter;
+    instruction_get_field = ref empty_timed_counter;
+    instruction_get_index = ref empty_timed_counter;
+    instruction_constant = ref empty_timed_counter;
+    instruction_unary_op = ref empty_timed_counter;
+    instruction_binary_op = ref empty_timed_counter;
     call_misc_internals = ref empty_timed_counter;
     builtin_call = ref empty_timed_counter;
     closure_call = ref empty_timed_counter;
@@ -112,6 +134,28 @@ let print_counters () =
   @@ show_timed_counter !(global_counters.interpret_non_phi_instruction);
   Printf.printf "  handle_separately_no_phi: %s\n"
   @@ show_timed_counter !(global_counters.handle_separately_no_phi);
+  Printf.printf "  instruction_alloc: %s\n"
+  @@ show_timed_counter !(global_counters.instruction_alloc);
+  Printf.printf "  instruction_get_global: %s\n"
+  @@ show_timed_counter !(global_counters.instruction_get_global);
+  Printf.printf "  instruction_load: %s\n"
+  @@ show_timed_counter !(global_counters.instruction_load);
+  Printf.printf "  instruction_store: %s\n"
+  @@ show_timed_counter !(global_counters.instruction_store);
+  Printf.printf "  instruction_store_empty_table: %s\n"
+  @@ show_timed_counter !(global_counters.instruction_store_empty_table);
+  Printf.printf "  instruction_store_closure: %s\n"
+  @@ show_timed_counter !(global_counters.instruction_store_closure);
+  Printf.printf "  instruction_get_field: %s\n"
+  @@ show_timed_counter !(global_counters.instruction_get_field);
+  Printf.printf "  instruction_get_index: %s\n"
+  @@ show_timed_counter !(global_counters.instruction_get_index);
+  Printf.printf "  instruction_constant: %s\n"
+  @@ show_timed_counter !(global_counters.instruction_constant);
+  Printf.printf "  instruction_unary_op: %s\n"
+  @@ show_timed_counter !(global_counters.instruction_unary_op);
+  Printf.printf "  instruction_binary_op: %s\n"
+  @@ show_timed_counter !(global_counters.instruction_binary_op);
   Printf.printf "  call_misc_internals: %s\n"
   @@ show_timed_counter !(global_counters.call_misc_internals);
   Printf.printf "  builtin_call: %s\n"
@@ -173,6 +217,17 @@ let reset_counters () =
   global_counters.reset_at := Mtime_clock.counter ();
   global_counters.interpret_non_phi_instruction := empty_timed_counter;
   global_counters.handle_separately_no_phi := empty_timed_counter;
+  global_counters.instruction_alloc := empty_timed_counter;
+  global_counters.instruction_get_global := empty_timed_counter;
+  global_counters.instruction_load := empty_timed_counter;
+  global_counters.instruction_store := empty_timed_counter;
+  global_counters.instruction_store_empty_table := empty_timed_counter;
+  global_counters.instruction_store_closure := empty_timed_counter;
+  global_counters.instruction_get_field := empty_timed_counter;
+  global_counters.instruction_get_index := empty_timed_counter;
+  global_counters.instruction_constant := empty_timed_counter;
+  global_counters.instruction_unary_op := empty_timed_counter;
+  global_counters.instruction_binary_op := empty_timed_counter;
   global_counters.call_misc_internals := empty_timed_counter;
   global_counters.builtin_call := empty_timed_counter;
   global_counters.closure_call := empty_timed_counter;

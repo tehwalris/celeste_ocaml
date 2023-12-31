@@ -1036,14 +1036,16 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
        mod 1000
        = 0
   then Perf.print_counters ();
-  let handle_separately_no_phi (f : state -> state * value option) :
+  let handle_separately_no_phi counter (f : state -> state * value option) :
       (state * value option) list * Ir.label option =
     Perf.count_and_time Perf.global_counters.handle_separately_no_phi
-    @@ fun () -> (List.map f states, None)
+    @@ fun () ->
+    Perf.count_and_time counter @@ fun () -> (List.map f states, None)
   in
   match insn with
   | Alloc ->
-      handle_separately_no_phi (fun state ->
+      handle_separately_no_phi Perf.global_counters.instruction_alloc
+        (fun state ->
           let heap_id = gen_heap_id () in
           let state =
             {
@@ -1053,7 +1055,8 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
           in
           (state, Some (Scalar (SPointer heap_id))))
   | GetGlobal (name, create_if_missing) ->
-      handle_separately_no_phi (fun state ->
+      handle_separately_no_phi Perf.global_counters.instruction_get_global
+        (fun state ->
           match StringMap.find_opt name state.global_env with
           | Some heap_id -> (state, Some (Scalar (SPointer heap_id)))
           | None when create_if_missing ->
@@ -1071,7 +1074,8 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
               ( state,
                 Some (Scalar (SNilPointer (Printf.sprintf "global %s" name))) ))
   | Load local_id ->
-      handle_separately_no_phi (fun state ->
+      handle_separately_no_phi Perf.global_counters.instruction_load
+        (fun state ->
           match Ir.LocalIdMap.find local_id state.local_env with
           | Scalar (SPointer heap_id) -> (
               match Heap.find heap_id state.heap with
@@ -1086,7 +1090,8 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                      (SNil (Some (Printf.sprintf "nil pointer to %s" hint)))) )
           | v -> failwith_not_pointer v)
   | Store (target_local_id, source_local_id) ->
-      handle_separately_no_phi (fun state ->
+      handle_separately_no_phi Perf.global_counters.instruction_store
+        (fun state ->
           let heap_id = heap_id_from_pointer_local state target_local_id in
           let source_value =
             Ir.LocalIdMap.find source_local_id state.local_env
@@ -1096,14 +1101,16 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
           in
           (state, None))
   | StoreEmptyTable local_id ->
-      handle_separately_no_phi (fun state ->
+      handle_separately_no_phi
+        Perf.global_counters.instruction_store_empty_table (fun state ->
           let heap_id = heap_id_from_pointer_local state local_id in
           let state =
             state_heap_update state (fun _ -> HUnknownTable) heap_id
           in
           (state, None))
   | StoreClosure (target_local_id, fun_global_id, captured_local_ids) ->
-      handle_separately_no_phi (fun state ->
+      handle_separately_no_phi Perf.global_counters.instruction_store_closure
+        (fun state ->
           let heap_id = heap_id_from_pointer_local state target_local_id in
           let captured_values =
             List.map
@@ -1117,7 +1124,8 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
           in
           (state, None))
   | GetField (table_local_id, field_name, create_if_missing) ->
-      handle_separately_no_phi (fun state ->
+      handle_separately_no_phi Perf.global_counters.instruction_get_field
+        (fun state ->
           let table_heap_id = heap_id_from_pointer_local state table_local_id in
           let old_fields =
             match Heap.find table_heap_id state.heap with
@@ -1147,7 +1155,8 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                   (Scalar (SNilPointer (Printf.sprintf "field %s" field_name)))
               ))
   | GetIndex (table_local_id, index_local_id, create_if_missing) ->
-      handle_separately_no_phi (fun state ->
+      handle_separately_no_phi Perf.global_counters.instruction_get_index
+        (fun state ->
           let table_heap_id = heap_id_from_pointer_local state table_local_id in
           let index =
             match Ir.LocalIdMap.find index_local_id state.local_env with
@@ -1186,13 +1195,17 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
               ( state,
                 Some (Scalar (SNilPointer (Printf.sprintf "index %d" index))) ))
   | NumberConstant v ->
-      handle_separately_no_phi (fun state -> (state, Some (Scalar (SNumber v))))
+      handle_separately_no_phi Perf.global_counters.instruction_constant
+        (fun state -> (state, Some (Scalar (SNumber v))))
   | BoolConstant v ->
-      handle_separately_no_phi (fun state -> (state, Some (Scalar (SBool v))))
+      handle_separately_no_phi Perf.global_counters.instruction_constant
+        (fun state -> (state, Some (Scalar (SBool v))))
   | StringConstant v ->
-      handle_separately_no_phi (fun state -> (state, Some (Scalar (SString v))))
+      handle_separately_no_phi Perf.global_counters.instruction_constant
+        (fun state -> (state, Some (Scalar (SString v))))
   | NilConstant ->
-      handle_separately_no_phi (fun state -> (state, Some (Scalar (SNil None))))
+      handle_separately_no_phi Perf.global_counters.instruction_constant
+        (fun state -> (state, Some (Scalar (SNil None))))
   | Call (fun_local_id, arg_local_ids) ->
       let states_by_function =
         Perf.count_and_time Perf.global_counters.call_misc_internals
@@ -1326,11 +1339,13 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
       in
       (states, None)
   | UnaryOp (op, local_id) ->
-      handle_separately_no_phi (fun state ->
+      handle_separately_no_phi Perf.global_counters.instruction_unary_op
+        (fun state ->
           let value = Ir.LocalIdMap.find local_id state.local_env in
           (state, Some (interpret_unary_op state op value)))
   | BinaryOp (left_local_id, op, right_local_id) ->
-      handle_separately_no_phi (fun state ->
+      handle_separately_no_phi Perf.global_counters.instruction_binary_op
+        (fun state ->
           let left_value = Ir.LocalIdMap.find left_local_id state.local_env in
           let right_value = Ir.LocalIdMap.find right_local_id state.local_env in
           (state, Some (interpret_binary_op left_value op right_value)))
