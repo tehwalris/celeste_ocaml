@@ -890,11 +890,12 @@ type prepared_cfg = {
 }
 
 type fixed_env = {
-  fun_defs : (Ir.fun_def * prepared_cfg) list;
-  builtin_funs : (string * builtin_fun) list;
+  fun_defs : (string, Ir.fun_def * prepared_cfg) Hashtbl.t;
+  builtin_funs : (string, builtin_fun) Hashtbl.t;
 }
 
-let empty_fixed_env : fixed_env = { fun_defs = []; builtin_funs = [] }
+let empty_fixed_env : fixed_env =
+  { fun_defs = Hashtbl.create 0; builtin_funs = Hashtbl.create 0 }
 
 let analyze_live_variables cfg =
   let module LiveVariableAnalysis =
@@ -1217,7 +1218,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                match fun_heap_value with
                | HBuiltinFun name ->
                    incr_mut Perf.global_counters.builtin_call;
-                   let builtin_fun = List.assoc name fixed_env.builtin_funs in
+                   let builtin_fun = Hashtbl.find fixed_env.builtin_funs name in
                    states |> List.to_seq
                    |> Seq.concat_map (fun state ->
                           state |> arg_values_of_state |> builtin_fun state
@@ -1227,9 +1228,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                    Perf.count_and_time Perf.global_counters.closure_call
                    @@ fun () ->
                    let fun_def, fun_cfg =
-                     List.find
-                       (fun (fun_def, _) -> fun_def.Ir.name = fun_global_id)
-                       fixed_env.fun_defs
+                     Hashtbl.find fixed_env.fun_defs fun_global_id
                    in
                    if fun_cfg.is_noop then (
                      incr_mut Perf.global_counters.closure_call_noop;
@@ -1658,10 +1657,10 @@ let init (cfg : Ir.cfg) (fun_defs : Ir.fun_def list)
   fixed_env_ref :=
     {
       fun_defs =
-        List.map
-          (fun (fun_def : Ir.fun_def) ->
-            (fun_def, prepare_cfg fun_def.cfg fixed_env_ref))
-          fun_defs;
-      builtin_funs = builtins;
+        fun_defs |> List.to_seq
+        |> Seq.map (fun (fun_def : Ir.fun_def) ->
+               (fun_def.name, (fun_def, prepare_cfg fun_def.cfg fixed_env_ref)))
+        |> Hashtbl.of_seq;
+      builtin_funs = builtins |> List.to_seq |> Hashtbl.of_seq;
     };
   (prepare_cfg cfg fixed_env_ref, fixed_env_ref, state)

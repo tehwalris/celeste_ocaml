@@ -19,9 +19,9 @@ __reset_button_states()
 
 let print_lua_perf_counters fixed_env =
   let named_counters =
-    List.map
-      (fun (d, cfg) -> (d.Ir.name, !(cfg.Interpreter.counter_ref)))
-      fixed_env.Interpreter.fun_defs
+    fixed_env.Interpreter.fun_defs |> Hashtbl.to_seq
+    |> Seq.map (fun (name, (_, cfg)) -> (name, !(cfg.Interpreter.counter_ref)))
+    |> List.of_seq
   in
   Perf.print_named_counters named_counters
 
