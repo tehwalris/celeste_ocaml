@@ -429,6 +429,7 @@ and compile_closure (c : Ctxt.t) (fun_ast : ast) (name_hint : string option) :
       name = fun_name;
       capture_ids = inner_capture_ids;
       arg_ids = inner_arg_val_ids;
+      locals_count = Ir.max_local_id_of_cfg cfg + 1;
       cfg;
     }
   in

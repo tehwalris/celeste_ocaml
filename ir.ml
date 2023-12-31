@@ -40,6 +40,7 @@ type fun_def = {
   name : global_id;
   capture_ids : local_id list;
   arg_ids : local_id option list;
+  locals_count : int;
   cfg : cfg;
 }
 [@@deriving show]
@@ -101,11 +102,36 @@ let terminator_map_local_ids (f : local_id -> local_id)
   | Br _ -> terminator
   | Cbr (val_id, l_true, l_false) -> Cbr (f val_id, l_true, l_false)
 
+let block_map_local_ids (f : local_id -> local_id) (block : block) : block =
+  {
+    instructions =
+      List.map (fun (id, instruction) -> (f id, instruction)) block.instructions;
+    terminator =
+      ( f (fst block.terminator),
+        terminator_map_local_ids f (snd block.terminator) );
+    hint_normalize = block.hint_normalize;
+  }
+
 let cfg_map_blocks (f : block -> block) (cfg : cfg) : cfg =
   {
     entry = f cfg.entry;
     named = List.map (fun (id, block) -> (id, f block)) cfg.named;
   }
+
+let max_local_id_of_cfg (cfg : cfg) =
+  let max_local_id = ref 0 in
+  ignore
+  @@ cfg_map_blocks
+       (fun block ->
+         ignore
+         @@ block_map_local_ids
+              (fun id ->
+                max_local_id := max !max_local_id id;
+                id)
+              block;
+         block)
+       cfg;
+  !max_local_id
 
 let split_block_phi_instructions (block : block) =
   let is_phi = function _, Phi _ -> true | _ -> false in
