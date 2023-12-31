@@ -39,7 +39,7 @@ type cfg = { entry : block; named : (label * block) list } [@@deriving show]
 type fun_def = {
   name : global_id;
   capture_ids : local_id list;
-  arg_ids : local_id list;
+  arg_ids : local_id option list;
   cfg : cfg;
 }
 [@@deriving show]

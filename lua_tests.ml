@@ -53,8 +53,7 @@ let run_real_lua lua_code =
 let prepare_to_run_our_lua lua_code =
   (* HACK the parser does not like comments at the end of the file without a trailing newline *)
   let ast = Lua_parser.Parse.parse_from_string (lua_code ^ "\n") in
-  let stream = Frontend.compile_top_level_ast ast in
-  let cfg, fun_defs = Frontend.cfg_of_stream stream in
+  let cfg, fun_defs = Frontend.compile ast in
   let cfg, fixed_env, state =
     Interpreter.init cfg fun_defs
     @@ List.concat [ Builtin.level_1_builtins; Builtin.level_2_builtins ]
@@ -197,7 +196,7 @@ let%test "prepared_cfg.is_noop" =
   let stream = Frontend.compile_top_level_ast ast in
   let cfg =
     match Frontend.cfg_of_stream stream with
-    | _, [ { cfg; _ } ] -> cfg
+    | _, [ { cfg; _ } ], _ -> cfg
     | _ -> failwith "expected one function"
   in
   let cfg = Interpreter.prepare_cfg cfg (ref Interpreter.empty_fixed_env) in
@@ -233,8 +232,7 @@ let%test_unit "vectorize" =
 
     let lua_code_post = load_lua_file "vectorize_post.lua" in
     let ast_post = Lua_parser.Parse.parse_from_string (lua_code_post ^ "\n") in
-    let stream_post = Frontend.compile_top_level_ast ast_post in
-    let cfg_post, fun_defs_post = Frontend.cfg_of_stream stream_post in
+    let cfg_post, fun_defs_post = Frontend.compile ast_post in
     assert (fun_defs_post = []);
     let cfg_post = Interpreter.prepare_cfg cfg_post fixed_env_ref in
 

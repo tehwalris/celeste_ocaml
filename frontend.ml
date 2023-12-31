@@ -1,9 +1,5 @@
 open Lua_parser.Ast
 
-let rec iterate_until_stable (f : 'a -> 'a) (x : 'a) : 'a =
-  let x' = f x in
-  if x' = x then x else iterate_until_stable f x'
-
 type hint = Normalize [@@deriving show]
 
 type stream_el =
@@ -19,13 +15,44 @@ type stream = stream_el list [@@deriving show]
 let ( >@ ) x y = y @ x
 let ( >:: ) x y = y :: x
 
+let stream_el_map_local_ids (f : Ir.local_id -> Ir.local_id)
+    (stream_el : stream_el) : stream_el =
+  match stream_el with
+  | L _ -> stream_el
+  | I (id, insn) -> I (f id, Ir.instruction_map_local_ids f insn)
+  | H _ -> stream_el
+  | T (id, terminator) -> T (f id, Ir.terminator_map_local_ids f terminator)
+  (* intentionally not mapping the ids in fun_def because they refer to the inner
+     CFG, not the one that this stream is for *)
+  | F _ -> stream_el
+
 let unsupported_ast ast =
   Lua_parser.Pp_lua.pp_lua ast;
   Printf.printf "\n";
   Lua_parser.Pp_ast.pp_ast_show ast;
   failwith "unsupported AST"
 
-let cfg_of_stream (code : stream) : Ir.cfg * Ir.fun_def list =
+let stream_make_local_ids_dense (stream : stream) :
+    stream * Ir.local_id Ir.LocalIdMap.t =
+  let new_ids_by_old_ids = ref Ir.LocalIdMap.empty in
+  let next_id = ref 0 in
+  let stream =
+    stream |> List.rev
+    |> List.map
+         ( stream_el_map_local_ids @@ fun old_id ->
+           match Ir.LocalIdMap.find_opt old_id !new_ids_by_old_ids with
+           | Some new_id -> new_id
+           | None ->
+               let new_id = !next_id in
+               next_id := !next_id + 1;
+               new_ids_by_old_ids :=
+                 Ir.LocalIdMap.add old_id new_id !new_ids_by_old_ids;
+               new_id )
+    |> List.rev
+  in
+  (stream, !new_ids_by_old_ids)
+
+let cfg_of_stream_inner (code : stream) : Ir.cfg * Ir.fun_def list =
   let make_block instructions terminator hint_normalize : Ir.block =
     { instructions; terminator = Option.get terminator; hint_normalize }
   in
@@ -89,13 +116,18 @@ let cfg_of_stream (code : stream) : Ir.cfg * Ir.fun_def list =
               fun_def :: fun_defs ))
       ([], None, false, [], []) code
   in
-  ( Contract_blocks.contract_blocks
-      {
-        entry =
-          make_block unused_instructions unused_terminator unused_hint_normalize;
-        named = named_blocks;
-      },
+  ( {
+      entry =
+        make_block unused_instructions unused_terminator unused_hint_normalize;
+      named = named_blocks;
+    },
     fun_defs )
+
+let cfg_of_stream (code : stream) :
+    Ir.cfg * Ir.fun_def list * Ir.local_id Ir.LocalIdMap.t =
+  let code, new_ids_by_old_ids = stream_make_local_ids_dense code in
+  let cfg, fun_defs = cfg_of_stream_inner code in
+  (Contract_blocks.contract_blocks cfg, fun_defs, new_ids_by_old_ids)
 
 module Ctxt = struct
   type t = (string * Ir.local_id) list
@@ -372,7 +404,25 @@ and compile_closure (c : Ctxt.t) (fun_ast : ast) (name_hint : string option) :
     | T (_, Ret _) :: _ -> inner_code
     | _ -> inner_code >:: T (gen_local_id (), Ret None)
   in
-  let cfg, inner_fun_defs = cfg_of_stream inner_code in
+  let cfg, inner_fun_defs, new_ids_by_old_ids = cfg_of_stream inner_code in
+  let inner_capture_ids =
+    List.map
+      (fun old_id -> Ir.LocalIdMap.find_opt old_id new_ids_by_old_ids)
+      inner_capture_ids
+  in
+  let inner_arg_val_ids =
+    List.map
+      (fun old_id -> Ir.LocalIdMap.find_opt old_id new_ids_by_old_ids)
+      inner_arg_val_ids
+  in
+  let outer_capture_ids =
+    List.map2
+      (fun (_, outer_id) inner_id ->
+        match inner_id with Some _ -> Some outer_id | None -> None)
+      c_no_duplicates inner_capture_ids
+    |> List.filter_map (fun v -> v)
+  in
+  let inner_capture_ids = List.filter_map (fun v -> v) inner_capture_ids in
   let fun_name = gen_global_id (Option.value name_hint ~default:"anonymous") in
   let fun_def : Ir.fun_def =
     {
@@ -388,8 +438,7 @@ and compile_closure (c : Ctxt.t) (fun_ast : ast) (name_hint : string option) :
     >:: I (closure_id, Ir.Alloc)
     >:: I
           ( gen_local_id (),
-            Ir.StoreClosure (closure_id, fun_name, List.map snd c_no_duplicates)
-          ) )
+            Ir.StoreClosure (closure_id, fun_name, outer_capture_ids) ) )
 
 and compile_statement (c : Ctxt.t) (break_label : Ir.label option) (stmt : ast)
     : Ctxt.t * stream =
@@ -534,6 +583,11 @@ let compile_top_level_ast (ast : ast) : stream =
   in
   let _, stream = compile_statements Ctxt.empty None statements in
   stream >@ [ T (gen_local_id (), Ir.Ret None) ]
+
+let compile ast =
+  let stream = compile_top_level_ast ast in
+  let cfg, fun_defs, _ = cfg_of_stream stream in
+  (cfg, fun_defs)
 
 let load_program filename =
   BatFile.with_file_in filename (fun f ->

@@ -1284,10 +1284,14 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                              state with
                              local_env =
                                List.fold_left2
-                                 (fun locals id value ->
-                                   Ir.LocalIdMap.add id value locals)
+                                 (fun locals id value -> match id with
+                                 | Some id -> Ir.LocalIdMap.add id value locals
+                                 | None -> locals)
                                  Ir.LocalIdMap.empty
-                                 (fun_def.Ir.capture_ids @ fun_def.Ir.arg_ids)
+                                 (List.map
+                                    (fun v -> Some v)
+                                    fun_def.Ir.capture_ids
+                                 @ fun_def.Ir.arg_ids)
                                  (captured_values @ padded_arg_values);
                              outer_local_envs =
                                state.local_env :: state.outer_local_envs;

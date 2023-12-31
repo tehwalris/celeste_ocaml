@@ -188,8 +188,7 @@ let () =
            "\n";
          ]
   in
-  let stream = Frontend.compile_top_level_ast ast in
-  let cfg, fun_defs = Frontend.cfg_of_stream stream in
+  let cfg, fun_defs = Frontend.compile ast in
   let cfg, fixed_env_ref, initial_state =
     Interpreter.init cfg fun_defs
     @@ List.concat
@@ -204,8 +203,7 @@ let () =
     Lua_parser.Parse.parse_from_string
     @@ String.concat "\n" [ frame_code; "\n" ]
   in
-  let frame_stream = Frontend.compile_top_level_ast frame_ast in
-  let frame_cfg, frame_fun_defs = Frontend.cfg_of_stream frame_stream in
+  let frame_cfg, frame_fun_defs = Frontend.compile frame_ast in
   assert (frame_fun_defs = []);
   let frame_cfg = Interpreter.prepare_cfg frame_cfg fixed_env_ref in
 
