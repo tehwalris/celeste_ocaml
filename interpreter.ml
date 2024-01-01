@@ -269,40 +269,6 @@ module Heap = struct
       (HeapIdMap.cardinal heap.new_values)
 end
 
-module LocalEnv = struct
-  (* TODO you were here: the point was that this would be a dense local id map *)
-
-  type t = value option Array.t
-
-  let create size = Array.init size (fun _ -> None)
-  let size (t : t) = Array.length t
-  let find_opt local_id (t : t) = t.(local_id)
-  let find local_id (t : t) = Option.get @@ find_opt local_id t
-  let add_mut local_id value (t : t) = t.(local_id) <- Some value
-
-  let add local_id value (t : t) =
-    let t = Array.copy t in
-    add_mut local_id value t;
-    t
-
-  let filter_map f (t : t) : t =
-    Array.mapi (fun id v -> match v with Some v -> f id v | None -> None) t
-
-  let filter f (t : t) : t =
-    filter_map (fun k v -> if f k v then Some v else None) t
-
-  let map f (t : t) : t = filter_map (fun _ v -> Some (f v)) t
-
-  let to_seq (t : t) =
-    t |> Array.to_seqi
-    |> Seq.filter_map (function id, Some v -> Some (id, v) | _, None -> None)
-
-  let of_seq size (seq : (Ir.local_id * value) Seq.t) =
-    let t = create size in
-    Seq.iter (fun (id, v) -> add_mut id v t) seq;
-    t
-end
-
 module StringMap = Map.Make (struct
   type t = string
 
@@ -316,8 +282,8 @@ let show_string_id_map show_v s =
 
 type state = {
   heap : Heap.t;
-  local_env : LocalEnv.t;
-  outer_local_envs : LocalEnv.t list;
+  local_env : value Ir.LocalIdMap.t;
+  outer_local_envs : value Ir.LocalIdMap.t list;
   global_env : heap_id StringMap.t;
   prints : string list;
   vector_size : int;
@@ -338,7 +304,7 @@ let failwith_not_pointer (v : value) =
 
 let heap_id_from_pointer_local (state : state) (local_id : Ir.local_id) :
     heap_id =
-  match LocalEnv.find local_id state.local_env with
+  match Ir.LocalIdMap.find local_id state.local_env with
   | Scalar (SPointer heap_id) -> heap_id
   | Scalar (SNilPointer hint) ->
       failwith @@ Printf.sprintf "Attempted to dereference nil (%s)" hint
@@ -402,10 +368,10 @@ let gc_heap (state : state) : state =
     {
       heap = Heap.empty;
       global_env = StringMap.map visit state.global_env;
-      local_env = LocalEnv.map (map_value_references visit) state.local_env;
+      local_env = Ir.LocalIdMap.map (map_value_references visit) state.local_env;
       outer_local_envs =
         List.map
-          (LocalEnv.map @@ map_value_references visit)
+          (Ir.LocalIdMap.map @@ map_value_references visit)
           state.outer_local_envs;
       prints = state.prints;
       vector_size = state.vector_size;
@@ -430,8 +396,12 @@ let normalize_state_maps_except_heap (state : state) : state =
   {
     heap = state.heap;
     global_env = state.global_env |> StringMap.to_seq |> StringMap.of_seq;
-    local_env = state.local_env;
-    outer_local_envs = state.outer_local_envs;
+    local_env = state.local_env |> Ir.LocalIdMap.to_seq |> Ir.LocalIdMap.of_seq;
+    outer_local_envs =
+      List.map
+        (fun local_env ->
+          local_env |> Ir.LocalIdMap.to_seq |> Ir.LocalIdMap.of_seq)
+        state.outer_local_envs;
     prints = state.prints;
     vector_size = state.vector_size;
   }
@@ -440,8 +410,8 @@ let state_map_values (f : value -> value) (state : state) : state =
   let f_heap_value = function HValue v -> HValue (f v) | v -> v in
   {
     heap = Heap.map f_heap_value state.heap;
-    local_env = LocalEnv.map f state.local_env;
-    outer_local_envs = List.map (LocalEnv.map f) state.outer_local_envs;
+    local_env = Ir.LocalIdMap.map f state.local_env;
+    outer_local_envs = List.map (Ir.LocalIdMap.map f) state.outer_local_envs;
     global_env = state.global_env;
     prints = state.prints;
     vector_size = state.vector_size;
@@ -724,12 +694,6 @@ let zip_map_state_values (f : (value * int) list -> value) (shape : state)
   in
   let extract f = List.map (fun state -> (f state, state.vector_size)) states in
 
-  let local_env_sizes =
-    List.map (fun state -> LocalEnv.size state.local_env) states
-  in
-  let local_env_size = List.hd local_env_sizes in
-  assert (List.for_all (fun size -> size = local_env_size) local_env_sizes);
-
   {
     heap =
       zip_map_map f_heap_value
@@ -738,15 +702,15 @@ let zip_map_state_values (f : (value * int) list -> value) (shape : state)
         (extract (fun state -> state.heap));
     local_env =
       zip_map_map f
-        (lift_to_seq LocalEnv.to_seq)
-        (LocalEnv.of_seq local_env_size)
+        (lift_to_seq Ir.LocalIdMap.to_seq)
+        Ir.LocalIdMap.of_seq
         (extract (fun state -> state.local_env));
     outer_local_envs =
       List.mapi
         (fun i _ ->
           zip_map_map f
-            (lift_to_seq LocalEnv.to_seq)
-            (LocalEnv.of_seq local_env_size)
+            (lift_to_seq Ir.LocalIdMap.to_seq)
+            Ir.LocalIdMap.of_seq
             (extract (fun state -> List.nth state.outer_local_envs i)))
         shape.outer_local_envs;
     global_env = shape.global_env;
@@ -1112,7 +1076,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
   | Load local_id ->
       handle_separately_no_phi Perf.global_counters.instruction_load
         (fun state ->
-          match LocalEnv.find local_id state.local_env with
+          match Ir.LocalIdMap.find local_id state.local_env with
           | Scalar (SPointer heap_id) -> (
               match Heap.find heap_id state.heap with
               | HValue value -> (state, Some value)
@@ -1129,7 +1093,9 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
       handle_separately_no_phi Perf.global_counters.instruction_store
         (fun state ->
           let heap_id = heap_id_from_pointer_local state target_local_id in
-          let source_value = LocalEnv.find source_local_id state.local_env in
+          let source_value =
+            Ir.LocalIdMap.find source_local_id state.local_env
+          in
           let state =
             state_heap_update state (fun _ -> HValue source_value) heap_id
           in
@@ -1148,7 +1114,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
           let heap_id = heap_id_from_pointer_local state target_local_id in
           let captured_values =
             List.map
-              (fun id -> LocalEnv.find id state.local_env)
+              (fun id -> Ir.LocalIdMap.find id state.local_env)
               captured_local_ids
           in
           let state =
@@ -1193,7 +1159,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
         (fun state ->
           let table_heap_id = heap_id_from_pointer_local state table_local_id in
           let index =
-            match LocalEnv.find index_local_id state.local_env with
+            match Ir.LocalIdMap.find index_local_id state.local_env with
             | Scalar (SNumber i) ->
                 if Pico_number.fraction_int_of i <> 0 then
                   failwith "Index is a scalar number, but not an integer";
@@ -1263,7 +1229,7 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                  Perf.count_and_time Perf.global_counters.call_misc_internals
                  @@ fun () ->
                  List.map
-                   (fun id -> LocalEnv.find id state.local_env)
+                   (fun id -> Ir.LocalIdMap.find id state.local_env)
                    arg_local_ids
                in
                match fun_heap_value with
@@ -1318,11 +1284,10 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
                              state with
                              local_env =
                                List.fold_left2
-                                 (fun locals id value ->
-                                   match id with
-                                   | Some id -> LocalEnv.add id value locals
-                                   | None -> locals)
-                                 (LocalEnv.create fun_def.locals_count)
+                                 (fun locals id value -> match id with
+                                 | Some id -> Ir.LocalIdMap.add id value locals
+                                 | None -> locals)
+                                 Ir.LocalIdMap.empty
                                  (List.map
                                     (fun v -> Some v)
                                     fun_def.Ir.capture_ids
@@ -1380,13 +1345,13 @@ let rec interpret_non_phi_instruction (fixed_env : fixed_env)
   | UnaryOp (op, local_id) ->
       handle_separately_no_phi Perf.global_counters.instruction_unary_op
         (fun state ->
-          let value = LocalEnv.find local_id state.local_env in
+          let value = Ir.LocalIdMap.find local_id state.local_env in
           (state, Some (interpret_unary_op state op value)))
   | BinaryOp (left_local_id, op, right_local_id) ->
       handle_separately_no_phi Perf.global_counters.instruction_binary_op
         (fun state ->
-          let left_value = LocalEnv.find left_local_id state.local_env in
-          let right_value = LocalEnv.find right_local_id state.local_env in
+          let left_value = Ir.LocalIdMap.find left_local_id state.local_env in
+          let right_value = Ir.LocalIdMap.find right_local_id state.local_env in
           (state, Some (interpret_binary_op left_value op right_value)))
   | Phi _ -> failwith "Phi nodes should be handled by phi_block_flow"
 
@@ -1403,10 +1368,11 @@ and flow_block_phi (source_block_name : Ir.label) (target_block : Ir.block) :
       (fun state ->
         List.fold_left
           (fun state (target_local_id, source_local_id) ->
-            let value = LocalEnv.find source_local_id state.local_env in
+            let value = Ir.LocalIdMap.find source_local_id state.local_env in
             {
               state with
-              local_env = LocalEnv.add target_local_id value state.local_env;
+              local_env =
+                Ir.LocalIdMap.add target_local_id value state.local_env;
             })
           state phi_instructions)
       states
@@ -1431,7 +1397,7 @@ and flow_block_before_join
       LazyStateSet.map
         (fun state ->
           let new_local_env =
-            LocalEnv.filter
+            Ir.LocalIdMap.filter
               (fun local_id _ -> Ir.LocalIdSet.mem local_id live_variables)
               state.local_env
           in
@@ -1462,7 +1428,7 @@ and flow_block_post_phi (fixed_env : fixed_env) (block : Ir.block) :
               | Some value ->
                   {
                     state with
-                    local_env = LocalEnv.add local_id value state.local_env;
+                    local_env = Ir.LocalIdMap.add local_id value state.local_env;
                   }
               | None -> state)
             results)
@@ -1481,7 +1447,7 @@ and flow_branch (terminator : Ir.terminator) (flow_target : Ir.label) :
       fun states ->
         LazyStateSet.filter_map
           (fun state ->
-            match LocalEnv.find local_id state.local_env with
+            match Ir.LocalIdMap.find local_id state.local_env with
             | Scalar (SBool false) | Scalar (SNil _) ->
                 if flow_target = false_label then Some state else None
             | Scalar SUnknownBool -> Some state
@@ -1517,11 +1483,10 @@ and flow_return (terminator : Ir.terminator) :
       state with
       local_env =
         (match preserved_local_id with
-        | Some preserved_local_id ->
-            LocalEnv.filter
-              (fun id _ -> id = preserved_local_id)
-              state.local_env
-        | None -> LocalEnv.filter (fun _ _ -> false) state.local_env);
+        | Some local_id ->
+            Ir.LocalIdMap.singleton local_id
+            @@ Ir.LocalIdMap.find local_id state.local_env
+        | None -> Ir.LocalIdMap.empty);
     }
   in
   match terminator with
@@ -1531,7 +1496,7 @@ and flow_return (terminator : Ir.terminator) :
           (states |> LazyStateSet.to_non_normalized_non_deduped_seq
           |> Seq.map (fun state ->
                  let state = clean_state_after_return (Some local_id) state in
-                 (state, LocalEnv.find local_id state.local_env))
+                 (state, Ir.LocalIdMap.find local_id state.local_env))
           |> List.of_seq |> LazyStateAndReturnSet.of_list)
   | Ir.Ret None ->
       fun states ->
@@ -1693,7 +1658,7 @@ let init (cfg : Ir.cfg) (fun_defs : Ir.fun_def list)
   let state =
     {
       heap = Heap.empty;
-      local_env = LocalEnv.create @@ (Ir.max_local_id_of_cfg cfg + 1);
+      local_env = Ir.LocalIdMap.empty;
       outer_local_envs = [];
       global_env = StringMap.empty;
       prints = [];
